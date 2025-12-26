@@ -20,6 +20,10 @@
 #include "lane_detector.h"
 #include "LocationManager.h"
 #include "../core/DatabaseManager.h"
+#include "../core/TripManager.h"
+#include "../core/VehicleManager.h"
+#include "../core/CacheManager.h"
+#include "../core/IndexManager.h"
 
 using namespace std;
 using json = nlohmann::json;
@@ -138,6 +142,15 @@ private:
 
     // Database connection
     DatabaseManager *db_manager = nullptr;
+    CacheManager *cache_manager = nullptr;
+    IndexManager *index_manager = nullptr;
+    TripManager *trip_manager = nullptr;
+    VehicleManager *vehicle_manager = nullptr;
+    
+    // Active trip tracking
+    uint64_t current_trip_id = 0;
+    double current_trip_start_lat = 0;
+    double current_trip_start_lon = 0;
 
 public:
     // Add this function to SmartDriveBridge class in websocket_bridge.cpp
@@ -210,6 +223,10 @@ public:
     ~SmartDriveBridge()
     {
         stop();
+        delete trip_manager;
+        delete vehicle_manager;
+        delete index_manager;
+        delete cache_manager;
         if (db_manager)
         {
             delete db_manager;
@@ -227,7 +244,25 @@ public:
             if (!db_manager->open())
             {
                 cerr << "Failed to open database" << endl;
+                return false;
             }
+            
+            // Initialize cache and index managers
+            cache_manager = new CacheManager(256, 256, 512, 1024);
+            index_manager = new IndexManager("compiled/indexes");
+            if (!index_manager->open_indexes())
+            {
+                if (!index_manager->create_indexes())
+                {
+                    cerr << "Failed to create indexes" << endl;
+                }
+            }
+            
+            // Initialize trip and vehicle managers
+            trip_manager = new TripManager(*db_manager, *cache_manager, *index_manager);
+            vehicle_manager = new VehicleManager(*db_manager, *cache_manager, *index_manager);
+            
+            cout << "✓ Database managers initialized" << endl;
 
             cout << "Initializing camera system..." << endl;
 
@@ -503,59 +538,108 @@ private:
         uint64_t driver_id = data.value("driver_id", 1ULL);
         uint64_t vehicle_id = data.value("vehicle_id", 1ULL);
 
-        live_data.trip_active = true;
-        live_data.trip_id = chrono::duration_cast<chrono::milliseconds>(
-                                chrono::system_clock::now().time_since_epoch())
-                                .count();
-
-        // Save trip start to database
-        if (db_manager && db_manager->isOpen())
+        if (!trip_manager)
         {
-            // Implement database save here
+            send_error(hdl, "Trip manager not initialized");
+            return;
         }
 
-        // Fixed JSON construction
-        json data_obj = json::object();
-        data_obj["trip_id"] = live_data.trip_id.load();
-        data_obj["start_time"] = time(nullptr);
-        data_obj["driver_id"] = driver_id;
-        data_obj["vehicle_id"] = vehicle_id;
-        data_obj["status"] = "active";
+        double start_lat = 31.5204;
+        double start_lon = 74.3587;
+        if (location_manager)
+        {
+            LocationData loc = location_manager->getLocation();
+            if (loc.valid)
+            {
+                start_lat = loc.latitude;
+                start_lon = loc.longitude;
+            }
+        }
 
-        json response = json::object();
-        response["type"] = "trip_started";
-        response["data"] = data_obj;
+        uint64_t trip_id = trip_manager->start_trip(driver_id, vehicle_id, start_lat, start_lon, "");
 
-        send_message(hdl, response.dump());
-        broadcast_live_data();
+        if (trip_id > 0)
+        {
+            live_data.trip_active = true;
+            live_data.trip_id = trip_id;
+            current_trip_id = trip_id;
+            current_trip_start_lat = start_lat;
+            current_trip_start_lon = start_lon;
+
+            json data_obj = json::object();
+            data_obj["trip_id"] = trip_id;
+            data_obj["start_time"] = time(nullptr);
+            data_obj["driver_id"] = driver_id;
+            data_obj["vehicle_id"] = vehicle_id;
+            data_obj["status"] = "active";
+
+            json response = json::object();
+            response["type"] = "trip_started";
+            response["data"] = data_obj;
+
+            send_message(hdl, response.dump());
+            broadcast_live_data();
+        }
+        else
+        {
+            send_error(hdl, "Failed to start trip in database");
+        }
     }
 
     void handle_stop_trip(connection_hdl hdl, const json &data)
     {
-        live_data.trip_active = false;
-
-        // Save trip end to database
-        if (db_manager && db_manager->isOpen())
+        if (!trip_manager)
         {
-            // Implement database save here
+            send_error(hdl, "Trip manager not initialized");
+            return;
         }
 
-        // Fixed JSON construction
-        json data_obj = json::object();
-        data_obj["trip_id"] = live_data.trip_id.load();
-        data_obj["end_time"] = time(nullptr);
-        data_obj["distance"] = 0; // Calculate from GPS
-        data_obj["duration"] = 0;
+        uint64_t trip_id = current_trip_id > 0 ? current_trip_id : live_data.trip_id.load();
+        
+        if (trip_id == 0)
+        {
+            send_error(hdl, "No active trip to stop");
+            return;
+        }
 
-        json response = json::object();
-        response["type"] = "trip_stopped";
-        response["data"] = data_obj;
+        double end_lat = 31.5204;
+        double end_lon = 74.3587;
+        if (location_manager)
+        {
+            LocationData loc = location_manager->getLocation();
+            if (loc.valid)
+            {
+                end_lat = loc.latitude;
+                end_lon = loc.longitude;
+            }
+        }
 
-        send_message(hdl, response.dump());
-        broadcast_live_data();
+        bool success = trip_manager->end_trip(trip_id, end_lat, end_lon, "");
 
-        // Reset trip-specific data
-        live_data.trip_id = 0;
+        if (success)
+        {
+            live_data.trip_active = false;
+
+            json data_obj = json::object();
+            data_obj["trip_id"] = trip_id;
+            data_obj["end_time"] = time(nullptr);
+            data_obj["distance"] = 0;
+            data_obj["duration"] = 0;
+
+            json response = json::object();
+            response["type"] = "trip_stopped";
+            response["data"] = data_obj;
+
+            send_message(hdl, response.dump());
+            broadcast_live_data();
+
+            current_trip_id = 0;
+            live_data.trip_id = 0;
+        }
+        else
+        {
+            send_error(hdl, "Failed to end trip in database");
+        }
     }
 
     void handle_toggle_camera(connection_hdl hdl, const json &data)
@@ -566,16 +650,25 @@ private:
         {
             if (camera)
             {
-                camera_running = true;
-                if (!camera_thread.joinable())
+                // Join the old thread if it exists and has finished
+                if (camera_thread.joinable())
                 {
-                    camera_thread = thread(&SmartDriveBridge::camera_loop, this);
+                    camera_thread.join();
                 }
+                
+                camera_running = true;
+                camera_thread = thread(&SmartDriveBridge::camera_loop, this);
             }
         }
         else if (!enable && camera_running.load())
         {
             camera_running = false;
+            
+            // Wait for camera thread to finish
+            if (camera_thread.joinable())
+            {
+                camera_thread.join();
+            }
         }
 
         // FIXED: Use .load() for atomic<bool>
@@ -613,29 +706,76 @@ private:
 
     void handle_get_trip_history(connection_hdl hdl, const json &data)
     {
-        // Query database for trip history
+        if (!trip_manager)
+        {
+            send_error(hdl, "Trip manager not initialized");
+            return;
+        }
+
+        uint64_t driver_id = data.value("driver_id", 1ULL);
+        int limit = data.value("limit", 20);
+
+        auto trips = trip_manager->get_driver_trips(driver_id, limit);
+
+        json trips_array = json::array();
+        for (const auto &trip : trips)
+        {
+            json trip_obj = json::object();
+            trip_obj["trip_id"] = trip.trip_id;
+            trip_obj["driver_id"] = trip.driver_id;
+            trip_obj["vehicle_id"] = trip.vehicle_id;
+            trip_obj["start_time"] = trip.start_time;
+            trip_obj["end_time"] = trip.end_time;
+            trip_obj["duration"] = trip.duration;
+            trip_obj["distance"] = trip.distance;
+            trip_obj["avg_speed"] = trip.avg_speed;
+            trip_obj["max_speed"] = trip.max_speed;
+            trip_obj["fuel_consumed"] = trip.fuel_consumed;
+            trip_obj["fuel_efficiency"] = trip.fuel_efficiency;
+            trip_obj["start_address"] = string(trip.start_address);
+            trip_obj["end_address"] = string(trip.end_address);
+            trips_array.push_back(trip_obj);
+        }
+
         json response = json::object();
         response["type"] = "trip_history";
-        response["data"] = json::array(); // Empty array for now
-
-        if (db_manager && db_manager->isOpen())
-        {
-            // Implement database query here
-        }
+        response["data"] = trips_array;
 
         send_message(hdl, response.dump());
     }
 
     void handle_get_vehicles(connection_hdl hdl, const json &data)
     {
+        if (!vehicle_manager)
+        {
+            send_error(hdl, "Vehicle manager not initialized");
+            return;
+        }
+
+        uint64_t driver_id = data.value("driver_id", 1ULL);
+
+        auto vehicles = vehicle_manager->get_driver_vehicles(driver_id);
+
+        json vehicles_array = json::array();
+        for (const auto &vehicle : vehicles)
+        {
+            json vehicle_obj = json::object();
+            vehicle_obj["vehicle_id"] = vehicle.vehicle_id;
+            vehicle_obj["owner_driver_id"] = vehicle.owner_driver_id;
+            vehicle_obj["license_plate"] = string(vehicle.license_plate);
+            vehicle_obj["make"] = string(vehicle.make);
+            vehicle_obj["model"] = string(vehicle.model);
+            vehicle_obj["year"] = vehicle.year;
+            vehicle_obj["type"] = static_cast<int>(vehicle.type);
+            vehicle_obj["current_odometer"] = vehicle.current_odometer;
+            vehicle_obj["fuel_type"] = string(vehicle.fuel_type);
+            vehicle_obj["vin"] = string(vehicle.vin);
+            vehicles_array.push_back(vehicle_obj);
+        }
+
         json response = json::object();
         response["type"] = "vehicles";
-        response["data"] = json::array(); // Empty array for now
-
-        if (db_manager && db_manager->isOpen())
-        {
-            // Implement database query here
-        }
+        response["data"] = vehicles_array;
 
         send_message(hdl, response.dump());
     }
@@ -758,6 +898,13 @@ private:
                        (live_data.lane_departures.load() * 3.0);
         live_data.safety_score = max(0.0, min(1000.0, score));
 
+        // Log GPS point if trip is active
+        if (live_data.trip_active.load() && trip_manager && current_trip_id > 0)
+        {
+            trip_manager->log_gps_point(current_trip_id, loc.latitude, loc.longitude, 
+                                       loc.speed_kmh, loc.altitude, loc.accuracy);
+        }
+
         // Broadcast live data
         if (live_data.trip_active.load())
         {
@@ -767,17 +914,30 @@ private:
 
     void broadcast_live_data()
     {
-        // Fixed JSON construction with .load() for atomic values
+        double lat = 31.5204;
+        double lon = 74.3587;
+        if (location_manager)
+        {
+            LocationData loc = location_manager->getLocation();
+            if (loc.valid)
+            {
+                lat = loc.latitude;
+                lon = loc.longitude;
+            }
+        }
+
         json data_obj = json::object();
         data_obj["speed"] = live_data.speed.load();
         data_obj["acceleration"] = live_data.acceleration.load();
         data_obj["safety_score"] = live_data.safety_score.load();
-        data_obj["lane_status"] = live_data.get_lane_status(); // Use getter
+        data_obj["lane_status"] = live_data.get_lane_status();
         data_obj["rapid_accel_count"] = live_data.rapid_accel_count.load();
         data_obj["hard_brake_count"] = live_data.hard_brake_count.load();
         data_obj["lane_departures"] = live_data.lane_departures.load();
         data_obj["trip_active"] = live_data.trip_active.load();
         data_obj["trip_id"] = live_data.trip_id.load();
+        data_obj["latitude"] = lat;
+        data_obj["longitude"] = lon;
         data_obj["timestamp"] = time(nullptr);
 
         json data = json::object();
