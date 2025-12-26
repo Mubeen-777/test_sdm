@@ -8,6 +8,17 @@
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        // Check if already authenticated, redirect to dashboard
+        (function() {
+            const sessionId = localStorage.getItem('session_id');
+            const userData = localStorage.getItem('user_data');
+            
+            if (sessionId && userData) {
+                window.location.href = 'index.html';
+            }
+        })();
+    </script>
     <style>
         .login-container {
             min-height: 100vh;
@@ -162,15 +173,58 @@
         .spinner-small {
             width: 20px;
             height: 20px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #4361ee;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top: 3px solid white;
             border-radius: 50%;
             animation: spin 1s linear infinite;
+            display: none;
+        }
+
+        .spinner-small.active {
+            display: inline-block;
         }
 
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
+        }
+
+        .password-wrapper {
+            position: relative;
+        }
+
+        .password-wrapper input {
+            padding-right: 45px;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #888;
+            cursor: pointer;
+            padding: 5px;
+            font-size: 1rem;
+        }
+
+        .password-toggle:hover {
+            color: #4361ee;
+        }
+
+        .btn-login.loading {
+            background: #6b7fe8;
+            pointer-events: none;
+        }
+
+        .btn-login .btn-text {
+            transition: opacity 0.2s;
+        }
+
+        .btn-login.loading .btn-text {
+            opacity: 0.7;
         }
     </style>
 </head>
@@ -191,22 +245,25 @@
                         <i class="fas fa-user"></i> Username
                     </label>
                     <input type="text" id="username" class="form-control" 
-                           placeholder="Enter username" required
-                           value="admin">
+                           placeholder="Enter username" required autocomplete="username">
                 </div>
 
                 <div class="form-group">
                     <label for="password">
                         <i class="fas fa-lock"></i> Password
                     </label>
-                    <input type="password" id="password" class="form-control" 
-                           placeholder="Enter password" required
-                           value="admin123">
+                    <div class="password-wrapper">
+                        <input type="password" id="password" class="form-control" 
+                               placeholder="Enter password" required autocomplete="current-password">
+                        <button type="button" class="password-toggle" id="passwordToggle" tabindex="-1">
+                            <i class="fas fa-eye" id="passwordToggleIcon"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <button type="submit" class="btn-login" id="loginBtn">
                     <span class="spinner-small" id="loginSpinner"></span>
-                    <span>Login to Dashboard</span>
+                    <span class="btn-text"><i class="fas fa-sign-in-alt"></i> Login to Dashboard</span>
                 </button>
             </form>
 
@@ -237,52 +294,95 @@
             const loginError = document.getElementById('loginError');
             const loginBtn = document.getElementById('loginBtn');
             const loginSpinner = document.getElementById('loginSpinner');
+            const btnText = loginBtn.querySelector('.btn-text');
+            const passwordInput = document.getElementById('password');
+            const passwordToggle = document.getElementById('passwordToggle');
+            const passwordToggleIcon = document.getElementById('passwordToggleIcon');
+
+            // Password show/hide toggle
+            passwordToggle.addEventListener('click', () => {
+                if (passwordInput.type === 'password') {
+                    passwordInput.type = 'text';
+                    passwordToggleIcon.classList.remove('fa-eye');
+                    passwordToggleIcon.classList.add('fa-eye-slash');
+                } else {
+                    passwordInput.type = 'password';
+                    passwordToggleIcon.classList.remove('fa-eye-slash');
+                    passwordToggleIcon.classList.add('fa-eye');
+                }
+            });
 
             loginForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 
-                const username = document.getElementById('username').value;
-                const password = document.getElementById('password').value;
+                const username = document.getElementById('username').value.trim();
+                const password = passwordInput.value;
                 
-                // Show loading
+                if (!username || !password) {
+                    loginError.textContent = 'Please enter both username and password.';
+                    loginError.style.display = 'block';
+                    return;
+                }
+                
+                // Show loading state
                 loginBtn.disabled = true;
+                loginBtn.classList.add('loading');
                 loginSpinner.classList.add('active');
+                btnText.innerHTML = 'Logging in...';
                 loginError.style.display = 'none';
                 
                 try {
-                    // For now, use mock login - replace with actual API call
-                    await mockLogin(username, password);
+                    // Use proxy endpoint to avoid CORS
+                    const response = await fetch('/api', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            operation: 'user_login',
+                            username: username,
+                            password: password
+                        })
+                    });
                     
+                    const result = await response.json();
+                    
+                    // Check for backend unavailable
+                    if (result.code === 'BACKEND_UNAVAILABLE') {
+                        throw new Error('Backend server is not running. Please start the C++ server on port 8080.');
+                    }
+                    
+                    if (result.status === 'success' && result.data) {
+                        btnText.innerHTML = '<i class="fas fa-check"></i> Success!';
+                        
+                        localStorage.setItem('session_id', result.data.session_id);
+                        localStorage.setItem('user_data', JSON.stringify({
+                            driver_id: parseInt(result.data.driver_id) || 0,
+                            name: result.data.name || username,
+                            role: result.data.role || '0',
+                            username: username
+                        }));
+                        
+                        // Small delay for visual feedback
+                        setTimeout(() => {
+                            window.location.href = 'index.html';
+                        }, 500);
+                    } else {
+                        throw new Error(result.message || 'Invalid credentials');
+                    }
                 } catch (error) {
-                    loginError.textContent = error.message;
+                    console.error('Login error:', error);
+                    loginError.textContent = error.message || 'Connection failed. Make sure backend server is running.';
                     loginError.style.display = 'block';
-                    loginBtn.disabled = false;
-                    loginSpinner.classList.remove('active');
+                    resetLoginButton();
                 }
             });
 
-            async function mockLogin(username, password) {
-                // Simulate API delay
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                
-                // Mock validation
-                if (username === 'admin' && password === 'admin123') {
-                    // Store session data
-                    const userData = {
-                        driver_id: 1,
-                        name: 'Mubeen Butt',
-                        role: '1', // Admin
-                        username: username
-                    };
-                    
-                    localStorage.setItem('session_id', 'mock_session_' + Date.now());
-                    localStorage.setItem('user_data', JSON.stringify(userData));
-                    
-                    // Redirect to dashboard
-                    window.location.href = 'index.html';
-                } else {
-                    throw new Error('Invalid username or password');
-                }
+            function resetLoginButton() {
+                loginBtn.disabled = false;
+                loginBtn.classList.remove('loading');
+                loginSpinner.classList.remove('active');
+                btnText.innerHTML = '<i class="fas fa-sign-in-alt"></i> Login to Dashboard';
             }
 
             // Auto-focus username field
@@ -292,17 +392,11 @@
             document.getElementById('username').addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    document.getElementById('password').focus();
-                }
-            });
-            
-            document.getElementById('password').addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    loginForm.dispatchEvent(new Event('submit'));
+                    passwordInput.focus();
                 }
             });
         });
     </script>
+
 </body>
 </html>

@@ -9,15 +9,18 @@
 #include "../../source/core/VehicleManager.h"
 #include "../../source/core/ExpenseManager.h"
 #include "../../source/core/DriverManager.h"
-
 #include "../../source/core/IncidentManager.h"
+#include "../../source/data_structures/MinHeap.h"
 
 #include "ResponseBuilder.h"
 #include <string>
 #include <map>
+#include <vector>
 #include <sstream>
 #include <algorithm>
 #include <iostream>
+#include <iomanip>
+#include <ctime>
 using namespace std;
 
 class SimpleJSON
@@ -79,6 +82,106 @@ private:
     IncidentManager &incident_mgr_;
 
     ResponseBuilder response_builder_;
+
+    map<string, string> trip_to_map(const TripRecord &trip) {
+        map<string, string> result;
+        result["trip_id"] = to_string(trip.trip_id);
+        result["driver_id"] = to_string(trip.driver_id);
+        result["vehicle_id"] = to_string(trip.vehicle_id);
+        result["start_time"] = to_string(trip.start_time);
+        result["end_time"] = to_string(trip.end_time);
+        result["duration"] = to_string(trip.duration);
+        result["distance"] = to_string(trip.distance);
+        result["avg_speed"] = to_string(trip.avg_speed);
+        result["max_speed"] = to_string(trip.max_speed);
+        result["fuel_consumed"] = to_string(trip.fuel_consumed);
+        result["fuel_efficiency"] = to_string(trip.fuel_efficiency);
+        result["harsh_braking_count"] = to_string(trip.harsh_braking_count);
+        result["rapid_acceleration_count"] = to_string(trip.rapid_acceleration_count);
+        result["speeding_count"] = to_string(trip.speeding_count);
+        result["start_address"] = string(trip.start_address);
+        result["end_address"] = string(trip.end_address);
+        return result;
+    }
+
+    map<string, string> vehicle_to_map(const VehicleInfo &vehicle) {
+        map<string, string> result;
+        result["vehicle_id"] = to_string(vehicle.vehicle_id);
+        result["owner_driver_id"] = to_string(vehicle.owner_driver_id);
+        result["license_plate"] = string(vehicle.license_plate);
+        result["make"] = string(vehicle.make);
+        result["model"] = string(vehicle.model);
+        result["year"] = to_string(vehicle.year);
+        result["type"] = to_string(static_cast<int>(vehicle.type));
+        result["current_odometer"] = to_string(vehicle.current_odometer);
+        result["fuel_type"] = string(vehicle.fuel_type);
+        result["vin"] = string(vehicle.vin);
+        return result;
+    }
+
+    map<string, string> expense_to_map(const ExpenseRecord &expense) {
+        map<string, string> result;
+        result["expense_id"] = to_string(expense.expense_id);
+        result["driver_id"] = to_string(expense.driver_id);
+        result["vehicle_id"] = to_string(expense.vehicle_id);
+        result["trip_id"] = to_string(expense.trip_id);
+        result["category"] = to_string(static_cast<int>(expense.category));
+        result["expense_date"] = to_string(expense.expense_date);
+        result["amount"] = to_string(expense.amount);
+        result["currency"] = string(expense.currency);
+        result["description"] = string(expense.description);
+        result["fuel_quantity"] = to_string(expense.fuel_quantity);
+        result["fuel_price_per_unit"] = to_string(expense.fuel_price_per_unit);
+        result["fuel_station"] = string(expense.fuel_station);
+        return result;
+    }
+
+    map<string, string> incident_to_map(const IncidentReport &incident) {
+        map<string, string> result;
+        result["incident_id"] = to_string(incident.incident_id);
+        result["driver_id"] = to_string(incident.driver_id);
+        result["vehicle_id"] = to_string(incident.vehicle_id);
+        result["trip_id"] = to_string(incident.trip_id);
+        result["type"] = to_string(static_cast<int>(incident.type));
+        result["incident_time"] = to_string(incident.incident_time);
+        result["latitude"] = to_string(incident.latitude);
+        result["longitude"] = to_string(incident.longitude);
+        result["location_address"] = string(incident.location_address);
+        result["description"] = string(incident.description);
+        result["is_resolved"] = to_string(incident.is_resolved);
+        return result;
+    }
+
+    map<string, string> budget_alert_to_map(const ExpenseManager::BudgetAlert &alert) {
+        map<string, string> result;
+        result["driver_id"] = to_string(alert.driver_id);
+        result["category"] = to_string(static_cast<int>(alert.category));
+        result["limit"] = to_string(alert.limit);
+        result["spent"] = to_string(alert.spent);
+        result["percentage_used"] = to_string(alert.percentage_used);
+        result["over_budget"] = alert.over_budget ? "1" : "0";
+        return result;
+    }
+
+    map<string, string> driver_ranking_to_map(const DriverManager::DriverRanking &ranking) {
+        map<string, string> result;
+        result["driver_id"] = to_string(ranking.driver_id);
+        result["driver_name"] = ranking.driver_name;
+        result["safety_score"] = to_string(ranking.safety_score);
+        result["total_distance"] = to_string(ranking.total_distance);
+        result["rank"] = to_string(ranking.rank);
+        result["percentile"] = to_string(ranking.percentile);
+        return result;
+    }
+
+    map<string, string> driver_recommendation_to_map(const DriverManager::DriverRecommendation &rec) {
+        map<string, string> result;
+        result["category"] = rec.category;
+        result["recommendation"] = rec.recommendation;
+        result["priority"] = to_string(rec.priority);
+        result["potential_improvement"] = to_string(rec.potential_improvement);
+        return result;
+    }
 
 public:
     RequestHandler(DatabaseManager &db, CacheManager &cache, SessionManager &session,
@@ -297,8 +400,13 @@ public:
 
             auto trips = trip_mgr_.get_driver_trips(driver.driver_id, limit);
 
-            return response_builder_.success("TRIP_HISTORY", {{"count", to_string(trips.size())},
-                                                              {"message", "Retrieved " + to_string(trips.size()) + " trips"}});
+            vector<map<string, string>> trip_maps;
+            for (const auto &trip : trips)
+            {
+                trip_maps.push_back(trip_to_map(trip));
+            }
+
+            return response_builder_.success_with_array("TRIP_HISTORY", "trips", trip_maps);
         }
         else if (operation == "trip_get_statistics")
         {
@@ -352,8 +460,13 @@ public:
         {
             auto vehicles = vehicle_mgr_.get_driver_vehicles(driver.driver_id);
 
-            return response_builder_.success("VEHICLE_LIST", {{"count", to_string(vehicles.size())},
-                                                              {"message", "Retrieved " + to_string(vehicles.size()) + " vehicles"}});
+            vector<map<string, string>> vehicle_maps;
+            for (const auto &vehicle : vehicles)
+            {
+                vehicle_maps.push_back(vehicle_to_map(vehicle));
+            }
+
+            return response_builder_.success_with_array("VEHICLE_LIST", "vehicles", vehicle_maps);
         }
         else if (operation == "vehicle_update_odometer")
         {
@@ -398,8 +511,49 @@ public:
         {
             auto alerts = vehicle_mgr_.get_top_alerts(10);
 
-            return response_builder_.success("MAINTENANCE_ALERTS", {{"count", to_string(alerts.size())},
-                                                                    {"message", "Retrieved " + to_string(alerts.size()) + " alerts"}});
+            vector<map<string, string>> alert_maps;
+            for (const auto &alert : alerts)
+            {
+                map<string, string> alert_map;
+                alert_map["vehicle_id"] = to_string(alert.vehicle_id);
+                alert_map["alert_id"] = to_string(alert.alert_id);
+                alert_map["description"] = string(alert.description);
+                alert_map["priority"] = to_string(alert.priority);
+                alert_map["due_timestamp"] = to_string(alert.due_timestamp);
+                alert_map["severity"] = to_string(alert.severity);
+                alert_maps.push_back(alert_map);
+            }
+
+            return response_builder_.success_with_array("MAINTENANCE_ALERTS", "alerts", alert_maps);
+        }
+        else if (operation == "vehicle_get_maintenance_history")
+        {
+            uint64_t vehicle_id = stoull(SimpleJSON::get_value(params, "vehicle_id", "0"));
+            
+            if (vehicle_id == 0)
+            {
+                return response_builder_.error("INVALID_PARAMS", "vehicle_id is required");
+            }
+
+            auto maintenance = vehicle_mgr_.get_vehicle_maintenance_history(vehicle_id);
+
+            vector<map<string, string>> maintenance_maps;
+            for (const auto &m : maintenance)
+            {
+                map<string, string> m_map;
+                m_map["maintenance_id"] = to_string(m.maintenance_id);
+                m_map["vehicle_id"] = to_string(m.vehicle_id);
+                m_map["type"] = to_string(static_cast<int>(m.type));
+                m_map["service_date"] = to_string(m.service_date);
+                m_map["odometer_reading"] = to_string(m.odometer_reading);
+                m_map["service_center"] = string(m.service_center);
+                m_map["description"] = string(m.description);
+                m_map["total_cost"] = to_string(m.total_cost);
+                m_map["currency"] = string(m.currency);
+                maintenance_maps.push_back(m_map);
+            }
+
+            return response_builder_.success_with_array("MAINTENANCE_HISTORY", "maintenance", maintenance_maps);
         }
 
         return response_builder_.error("UNKNOWN_OPERATION",
@@ -462,6 +616,38 @@ public:
                                                "Failed to add fuel expense");
             }
         }
+        else if (operation == "expense_get_list")
+        {
+            int limit = stoi(SimpleJSON::get_value(params, "limit", "100"));
+            int category = stoi(SimpleJSON::get_value(params, "category", "-1"));
+            uint64_t vehicle_id = stoull(SimpleJSON::get_value(params, "vehicle_id", "0"));
+
+            vector<ExpenseRecord> expenses;
+            if (category >= 0)
+            {
+                expenses = expense_mgr_.get_expenses_by_category(driver.driver_id, static_cast<ExpenseCategory>(category));
+            }
+            else
+            {
+                expenses = expense_mgr_.get_driver_expenses(driver.driver_id, limit);
+            }
+
+            if (vehicle_id > 0)
+            {
+                expenses.erase(remove_if(expenses.begin(), expenses.end(),
+                                        [vehicle_id](const ExpenseRecord &e)
+                                        { return e.vehicle_id != vehicle_id; }),
+                              expenses.end());
+            }
+
+            vector<map<string, string>> expense_maps;
+            for (const auto &expense : expenses)
+            {
+                expense_maps.push_back(expense_to_map(expense));
+            }
+
+            return response_builder_.success_with_array("EXPENSE_LIST", "expenses", expense_maps);
+        }
         else if (operation == "expense_get_summary")
         {
             uint64_t start_date = stoull(SimpleJSON::get_value(params, "start_date", "0"));
@@ -496,8 +682,13 @@ public:
         {
             auto alerts = expense_mgr_.get_budget_alerts(driver.driver_id);
 
-            return response_builder_.success("BUDGET_ALERTS", {{"count", to_string(alerts.size())},
-                                                               {"message", "Retrieved " + to_string(alerts.size()) + " budget alerts"}});
+            vector<map<string, string>> alert_maps;
+            for (const auto &alert : alerts)
+            {
+                alert_maps.push_back(budget_alert_to_map(alert));
+            }
+
+            return response_builder_.success_with_array("BUDGET_ALERTS", "alerts", alert_maps);
         }
 
         return response_builder_.error("UNKNOWN_OPERATION",
@@ -558,15 +749,25 @@ public:
 
             auto leaderboard = driver_mgr_.get_driver_leaderboard(limit);
 
-            return response_builder_.success("DRIVER_LEADERBOARD", {{"count", to_string(leaderboard.size())},
-                                                                    {"message", "Retrieved top " + to_string(leaderboard.size()) + " drivers"}});
+            vector<map<string, string>> ranking_maps;
+            for (const auto &ranking : leaderboard)
+            {
+                ranking_maps.push_back(driver_ranking_to_map(ranking));
+            }
+
+            return response_builder_.success_with_array("DRIVER_LEADERBOARD", "leaderboard", ranking_maps);
         }
         else if (operation == "driver_get_recommendations")
         {
             auto recommendations = driver_mgr_.get_improvement_recommendations(driver.driver_id);
 
-            return response_builder_.success("DRIVER_RECOMMENDATIONS", {{"count", to_string(recommendations.size())},
-                                                                        {"message", "Retrieved " + to_string(recommendations.size()) + " recommendations"}});
+            vector<map<string, string>> rec_maps;
+            for (const auto &rec : recommendations)
+            {
+                rec_maps.push_back(driver_recommendation_to_map(rec));
+            }
+
+            return response_builder_.success_with_array("DRIVER_RECOMMENDATIONS", "recommendations", rec_maps);
         }
 
         return response_builder_.error("UNKNOWN_OPERATION",
@@ -618,8 +819,13 @@ public:
         {
             auto incidents = incident_mgr_.get_driver_incidents(driver.driver_id);
 
-            return response_builder_.success("INCIDENT_LIST", {{"count", to_string(incidents.size())},
-                                                               {"message", "Retrieved " + to_string(incidents.size()) + " incidents"}});
+            vector<map<string, string>> incident_maps;
+            for (const auto &incident : incidents)
+            {
+                incident_maps.push_back(incident_to_map(incident));
+            }
+
+            return response_builder_.success_with_array("INCIDENT_LIST", "incidents", incident_maps);
         }
         else if (operation == "incident_get_statistics")
         {

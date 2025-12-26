@@ -3,6 +3,7 @@
 
 #include <string>
 #include <map>
+#include <vector>
 #include <sstream>
 #include <iostream>
 using namespace std;
@@ -63,6 +64,40 @@ public:
             json << ",\"message\":\"" << escape_json(message) << "\"";
         }
         
+        json << "}";
+        
+        return json.str();
+    }
+
+    string success_with_array(const string& status,
+                              const string& array_key,
+                              const vector<map<string, string>>& items) {
+        ostringstream json;
+        
+        json << "{";
+        json << "\"status\":\"success\",";
+        json << "\"code\":\"" << status << "\",";
+        json << "\"data\":{";
+        json << "\"" << array_key << "\":[";
+        
+        bool first_item = true;
+        for (const auto& item : items) {
+            if (!first_item) json << ",";
+            json << "{";
+            
+            bool first_field = true;
+            for (const auto& field : item) {
+                if (!first_field) json << ",";
+                json << "\"" << field.first << "\":\"" << escape_json(field.second) << "\"";
+                first_field = false;
+            }
+            
+            json << "}";
+            first_item = false;
+        }
+        
+        json << "],\"count\":" << items.size();
+        json << "}";
         json << "}";
         
         return json.str();

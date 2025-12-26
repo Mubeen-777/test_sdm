@@ -1,36 +1,34 @@
-// analytics.js - Analytics and Charts Module
+// analytics.js - Analytics and Charts Module (REAL DATA ONLY - NO MOCK DATA)
+// All data comes from the backend database via API
+
 class AnalyticsManager {
     constructor(app) {
         this.app = app;
         this.charts = {};
-        this.performanceData = {};
-        
-        // Initialize when DOM is ready
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', () => this.init());
-        } else {
-            this.init();
-        }
+        this.performanceData = {
+            safetyScores: [],
+            distances: [],
+            fuelEfficiency: [],
+            harshEvents: []
+        };
+        this.tripStats = null;
     }
 
-    init() {
+    async init() {
         this.setupEventListeners();
-        this.loadSampleData();
+        await this.loadRealData();
     }
 
     setupEventListeners() {
-        // Performance chart period change
         const performancePeriod = document.getElementById('performancePeriod');
         if (performancePeriod) {
             performancePeriod.addEventListener('change', () => this.updatePerformanceChart());
         }
 
-        // Date range filters
         const startDate = document.getElementById('reportStartDate');
         const endDate = document.getElementById('reportEndDate');
         
         if (startDate && endDate) {
-            // Set default dates (last 30 days)
             const end = new Date();
             const start = new Date();
             start.setDate(start.getDate() - 30);
@@ -43,18 +41,53 @@ class AnalyticsManager {
         }
     }
 
-    loadSampleData() {
-        // Sample performance data for charts
-        this.performanceData = {
-            safetyScores: [920, 915, 910, 905, 900, 895, 890, 885, 880, 875, 870, 865, 860, 855, 850, 845, 840, 835, 830, 825],
-            distances: [32.5, 28.7, 45.2, 38.9, 41.3, 36.8, 39.4, 42.7, 35.6, 40.1, 37.8, 43.2, 39.7, 41.8, 36.3, 44.1, 38.5, 42.3, 39.8, 37.2],
-            fuelEfficiency: [12.5, 12.3, 12.1, 11.9, 12.0, 12.2, 12.4, 12.1, 11.8, 12.0, 12.3, 12.5, 12.2, 12.0, 11.9, 12.1, 12.3, 12.4, 12.2, 12.0],
-            harshEvents: [2, 3, 1, 4, 2, 3, 1, 2, 4, 3, 2, 1, 3, 2, 4, 1, 2, 3, 1, 2]
-        };
+    async loadRealData() {
+        if (!window.db) {
+            console.warn('Database API not available - waiting for initialization');
+            return;
+        }
 
-        // Initialize charts when on reports page
-        if (this.app.currentPage === 'reports') {
-            this.initCharts();
+        try {
+            console.log('📊 Loading real analytics data from database...');
+            
+            const trips = await window.db.getTripHistory(50);
+            const stats = await window.db.getTripStatistics();
+
+            if (trips && trips.length > 0) {
+                this.performanceData = {
+                    safetyScores: trips.map(t => parseInt(t.safety_score) || 1000),
+                    distances: trips.map(t => parseFloat(t.distance) || 0),
+                    fuelEfficiency: trips.map(t => {
+                        const dist = parseFloat(t.distance) || 0;
+                        const fuel = parseFloat(t.fuel_consumed) || 1;
+                        return fuel > 0 ? dist / fuel : 0;
+                    }),
+                    harshEvents: trips.map(t => 
+                        (parseInt(t.harsh_braking_count) || 0) + 
+                        (parseInt(t.rapid_acceleration_count) || 0) +
+                        (parseInt(t.speeding_count) || 0)
+                    ),
+                    dates: trips.map(t => {
+                        if (t.start_time) {
+                            return new Date(parseInt(t.start_time) / 1000000);
+                        }
+                        return new Date();
+                    })
+                };
+                console.log(`✅ Loaded ${trips.length} trips for analytics`);
+            } else {
+                console.log('ℹ️ No trip data available yet');
+            }
+
+            if (stats) {
+                this.tripStats = stats;
+            }
+
+            if (this.app.currentPage === 'reports') {
+                this.initCharts();
+            }
+        } catch (error) {
+            console.error('❌ Failed to load analytics data:', error);
         }
     }
 
@@ -72,13 +105,10 @@ class AnalyticsManager {
 
         const ctx = canvas.getContext('2d');
         
-        // Generate labels for last 20 days
-        const labels = [];
-        for (let i = 19; i >= 0; i--) {
-            const date = new Date();
-            date.setDate(date.getDate() - i);
-            labels.push(date.getDate().toString().padStart(2, '0'));
-        }
+        // Generate labels from real data
+        const labels = this.performanceData.dates?.map(d => 
+            d.getDate().toString().padStart(2, '0')
+        ) || [];
 
         this.charts.performance = new Chart(ctx, {
             type: 'line',
@@ -116,57 +146,40 @@ class AnalyticsManager {
             },
             options: {
                 responsive: true,
+                animation: false,
                 interaction: {
                     mode: 'index',
                     intersect: false
                 },
                 scales: {
                     x: {
-                        title: {
-                            display: true,
-                            text: 'Days'
-                        }
+                        title: { display: true, text: 'Days' }
                     },
                     y: {
                         type: 'linear',
                         display: true,
                         position: 'left',
-                        title: {
-                            display: true,
-                            text: 'Safety Score'
-                        },
-                        min: 800,
+                        title: { display: true, text: 'Safety Score' },
+                        min: 0,
                         max: 1000
                     },
                     y1: {
                         type: 'linear',
                         display: true,
                         position: 'right',
-                        title: {
-                            display: true,
-                            text: 'Distance (km)'
-                        },
-                        grid: {
-                            drawOnChartArea: false
-                        }
+                        title: { display: true, text: 'Distance (km)' },
+                        grid: { drawOnChartArea: false }
                     },
                     y2: {
                         type: 'linear',
                         display: false,
                         position: 'right',
-                        grid: {
-                            drawOnChartArea: false
-                        }
+                        grid: { drawOnChartArea: false }
                     }
                 },
                 plugins: {
-                    legend: {
-                        position: 'top'
-                    },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false
-                    }
+                    legend: { position: 'top' },
+                    tooltip: { mode: 'index', intersect: false }
                 }
             }
         });
@@ -178,19 +191,19 @@ class AnalyticsManager {
 
         const ctx = canvas.getContext('2d');
         
-        // Generate safety trend data
-        const safetyData = [];
-        for (let i = 0; i < 12; i++) {
-            safetyData.push(850 + Math.random() * 100);
-        }
+        // Use real safety scores from database
+        const safetyData = this.performanceData.safetyScores.slice(-12);
+        const labels = this.performanceData.dates?.slice(-12).map(d => 
+            d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        ) || [];
 
         this.charts.safety = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+                labels: labels.length > 0 ? labels : ['No Data'],
                 datasets: [{
                     label: 'Safety Score',
-                    data: safetyData,
+                    data: safetyData.length > 0 ? safetyData : [0],
                     borderColor: '#4cc9f0',
                     backgroundColor: 'rgba(76, 201, 240, 0.2)',
                     fill: true,
@@ -199,35 +212,24 @@ class AnalyticsManager {
             },
             options: {
                 responsive: true,
+                animation: false,
                 scales: {
                     y: {
                         beginAtZero: false,
-                        min: 800,
+                        min: 0,
                         max: 1000,
-                        title: {
-                            display: true,
-                            text: 'Safety Score'
-                        }
+                        title: { display: true, text: 'Safety Score' }
                     }
                 },
-                plugins: {
-                    legend: {
-                        display: false
-                    }
-                }
+                plugins: { legend: { display: false } }
             }
         });
 
-        // Update current safety score display
-        const currentScore = safetyData[safetyData.length - 1];
-        document.getElementById('currentSafetyScore').textContent = Math.round(currentScore);
-        
-        // Calculate trend
-        const trend = ((currentScore - safetyData[0]) / safetyData[0] * 100).toFixed(1);
-        const trendElem = document.querySelector('.performance .value');
-        if (trendElem) {
-            trendElem.textContent = `${trend > 0 ? '+' : ''}${trend}%`;
-            trendElem.className = `value ${trend > 0 ? 'positive' : 'negative'}`;
+        // Update current safety score from real data
+        const currentScoreEl = document.getElementById('currentSafetyScore');
+        if (currentScoreEl) {
+            const currentScore = safetyData.length > 0 ? safetyData[safetyData.length - 1] : (this.tripStats?.safety_score || 1000);
+            currentScoreEl.textContent = Math.round(currentScore);
         }
     }
 
@@ -237,60 +239,34 @@ class AnalyticsManager {
 
         const ctx = canvas.getContext('2d');
         
-        // Generate fuel efficiency data
-        const fuelData = [];
-        for (let i = 0; i < 8; i++) {
-            fuelData.push(10 + Math.random() * 4);
-        }
+        // Use real fuel efficiency data
+        const fuelData = this.performanceData.fuelEfficiency.slice(-8);
+        const labels = this.performanceData.dates?.slice(-8).map(d => 
+            d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        ) || [];
 
         this.charts.fuel = new Chart(ctx, {
             type: 'bar',
             data: {
-                labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4', 'Week 5', 'Week 6', 'Week 7', 'Week 8'],
+                labels: labels.length > 0 ? labels : ['No Data'],
                 datasets: [{
                     label: 'Fuel Efficiency (km/L)',
-                    data: fuelData,
-                    backgroundColor: [
-                        'rgba(76, 201, 240, 0.7)',
-                        'rgba(67, 97, 238, 0.7)',
-                        'rgba(58, 12, 163, 0.7)',
-                        'rgba(114, 9, 183, 0.7)',
-                        'rgba(156, 136, 255, 0.7)',
-                        'rgba(248, 150, 30, 0.7)',
-                        'rgba(247, 37, 133, 0.7)',
-                        'rgba(0, 200, 83, 0.7)'
-                    ],
-                    borderColor: [
-                        'rgb(76, 201, 240)',
-                        'rgb(67, 97, 238)',
-                        'rgb(58, 12, 163)',
-                        'rgb(114, 9, 183)',
-                        'rgb(156, 136, 255)',
-                        'rgb(248, 150, 30)',
-                        'rgb(247, 37, 133)',
-                        'rgb(0, 200, 83)'
-                    ],
+                    data: fuelData.length > 0 ? fuelData : [0],
+                    backgroundColor: 'rgba(76, 201, 240, 0.7)',
+                    borderColor: 'rgb(76, 201, 240)',
                     borderWidth: 1
                 }]
             },
             options: {
                 responsive: true,
+                animation: false,
                 scales: {
                     y: {
-                        beginAtZero: false,
-                        min: 8,
-                        max: 16,
-                        title: {
-                            display: true,
-                            text: 'km per Liter'
-                        }
+                        beginAtZero: true,
+                        title: { display: true, text: 'km per Liter' }
                     }
                 },
-                plugins: {
-                    legend: {
-                        display: false
-                    }
-                }
+                plugins: { legend: { display: false } }
             }
         });
     }
@@ -301,457 +277,294 @@ class AnalyticsManager {
 
         const ctx = canvas.getContext('2d');
         
+        // Calculate real performance metrics
+        const stats = this.tripStats || {};
+        const safetyScore = (stats.safety_score || 1000) / 10; // Scale to 0-100
+        const avgDistance = this.performanceData.distances.length > 0 
+            ? Math.min(100, (this.performanceData.distances.reduce((a,b) => a+b, 0) / this.performanceData.distances.length) * 2)
+            : 0;
+        const efficiency = this.performanceData.fuelEfficiency.length > 0
+            ? Math.min(100, this.performanceData.fuelEfficiency.reduce((a,b) => a+b, 0) / this.performanceData.fuelEfficiency.length * 8)
+            : 0;
+        const harshEventsAvg = this.performanceData.harshEvents.length > 0
+            ? this.performanceData.harshEvents.reduce((a,b) => a+b, 0) / this.performanceData.harshEvents.length
+            : 0;
+        const consistency = Math.max(0, 100 - harshEventsAvg * 10);
+
         this.charts.radar = new Chart(ctx, {
             type: 'radar',
             data: {
-                labels: ['Safety', 'Efficiency', 'Consistency', 'Compliance', 'Punctuality', 'Economy'],
+                labels: ['Safety', 'Distance', 'Efficiency', 'Consistency', 'Compliance', 'Economy'],
                 datasets: [
                     {
                         label: 'Your Performance',
-                        data: [85, 78, 92, 88, 76, 82],
+                        data: [safetyScore, avgDistance, efficiency, consistency, safetyScore * 0.9, efficiency * 0.95],
                         backgroundColor: 'rgba(67, 97, 238, 0.2)',
                         borderColor: 'rgba(67, 97, 238, 1)',
                         borderWidth: 2,
                         pointBackgroundColor: 'rgba(67, 97, 238, 1)'
-                    },
-                    {
-                        label: 'Fleet Average',
-                        data: [75, 72, 78, 82, 70, 76],
-                        backgroundColor: 'rgba(76, 201, 240, 0.2)',
-                        borderColor: 'rgba(76, 201, 240, 1)',
-                        borderWidth: 2,
-                        pointBackgroundColor: 'rgba(76, 201, 240, 1)'
                     }
                 ]
             },
             options: {
                 responsive: true,
+                animation: false,
                 scales: {
                     r: {
-                        angleLines: {
-                            display: true
-                        },
-                        suggestedMin: 50,
+                        angleLines: { display: true },
+                        suggestedMin: 0,
                         suggestedMax: 100,
-                        ticks: {
-                            stepSize: 10
-                        }
+                        ticks: { stepSize: 20 }
                     }
                 },
-                plugins: {
-                    legend: {
-                        position: 'top'
-                    }
-                }
+                plugins: { legend: { position: 'top' } }
             }
         });
     }
 
-    updatePerformanceChart() {
-        if (!this.charts.performance) return;
+    async updatePerformanceChart() {
+        if (!this.charts.performance || !window.db) return;
 
         const period = document.getElementById('performancePeriod')?.value || '30';
         const days = parseInt(period);
-        
-        // Update chart with new period data
-        const labels = [];
-        const safetyData = [];
-        const distanceData = [];
-        const eventsData = [];
-        
-        for (let i = days - 1; i >= 0; i--) {
-            const date = new Date();
-            date.setDate(date.getDate() - i);
+
+        try {
+            const trips = await window.db.getTripHistory(days);
             
-            if (days <= 30) {
+            const labels = [];
+            const safetyData = [];
+            const distanceData = [];
+            const eventsData = [];
+            
+            trips.forEach((trip) => {
+                const date = trip.start_time ? new Date(parseInt(trip.start_time) / 1000000) : new Date();
                 labels.push(date.getDate().toString().padStart(2, '0'));
-            } else if (days <= 90) {
-                if (i % 3 === 0) {
-                    labels.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-                } else {
-                    labels.push('');
-                }
-            } else {
-                if (i % 7 === 0) {
-                    labels.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-                } else {
-                    labels.push('');
-                }
-            }
+                safetyData.push(parseInt(trip.safety_score) || 1000);
+                distanceData.push(parseFloat(trip.distance) || 0);
+                eventsData.push((parseInt(trip.harsh_braking_count) || 0) + (parseInt(trip.rapid_acceleration_count) || 0));
+            });
             
-            // Generate sample data
-            safetyData.push(800 + Math.random() * 200);
-            distanceData.push(20 + Math.random() * 40);
-            eventsData.push(Math.floor(Math.random() * 6));
+            this.charts.performance.data.labels = labels;
+            this.charts.performance.data.datasets[0].data = safetyData;
+            this.charts.performance.data.datasets[1].data = distanceData;
+            this.charts.performance.data.datasets[2].data = eventsData;
+            
+            this.charts.performance.update('none');
+        } catch (error) {
+            console.error('Failed to update performance chart:', error);
         }
-        
-        this.charts.performance.data.labels = labels;
-        this.charts.performance.data.datasets[0].data = safetyData;
-        this.charts.performance.data.datasets[1].data = distanceData;
-        this.charts.performance.data.datasets[2].data = eventsData;
-        
-        this.charts.performance.update();
     }
 
-    updateMetrics() {
-        // Calculate and update metrics
-        const avgDistance = this.calculateAverage(this.performanceData.distances);
-        const avgEvents = this.calculateAverage(this.performanceData.harshEvents);
-        const avgFuel = this.calculateAverage(this.performanceData.fuelEfficiency);
-        
-        // Update metric displays
-        document.getElementById('avgTripDistance').textContent = avgDistance.toFixed(1) + ' km';
-        document.getElementById('harshBrakingRate').textContent = (avgEvents / avgDistance * 100).toFixed(1);
-        document.getElementById('rapidAccelRate').textContent = (avgEvents / avgDistance * 100 * 0.7).toFixed(1);
-        document.getElementById('fuelEfficiency').textContent = avgFuel.toFixed(1) + ' km/L';
-        
-        // Update cost metrics
-        const costPerKm = 0.65 / avgFuel; // Assuming fuel price $0.65/L
-        const dailyDistance = avgDistance;
-        const monthlyCost = dailyDistance * 30 * costPerKm;
-        
-        document.getElementById('costPerKm').textContent = '$' + costPerKm.toFixed(2);
-        document.getElementById('dailyCost').textContent = '$' + (dailyDistance * costPerKm).toFixed(2);
-        document.getElementById('monthlyCost').textContent = '$' + monthlyCost.toFixed(2);
-        
-        // Update other metrics
-        document.getElementById('avgTripDuration').textContent = Math.round(avgDistance / 40 * 60) + ' min';
-        document.getElementById('averageSpeed').textContent = (avgDistance / (avgDistance / 40)).toFixed(1) + ' km/h';
-        document.getElementById('totalDriveTime').textContent = Math.round(this.performanceData.distances.reduce((a, b) => a + b, 0) / 40) + ' hours';
+    async updateMetrics() {
+        if (!window.db) return;
+
+        try {
+            const stats = await window.db.getTripStatistics();
+            if (!stats) return;
+
+            const avgDistance = stats.total_trips > 0 ? stats.total_distance / stats.total_trips : 0;
+            const avgSpeed = stats.avg_speed || 0;
+            const avgFuelEfficiency = this.performanceData.fuelEfficiency.length > 0
+                ? this.performanceData.fuelEfficiency.reduce((a,b) => a+b, 0) / this.performanceData.fuelEfficiency.length
+                : 0;
+            
+            const elements = {
+                avgTripDistance: avgDistance.toFixed(1) + ' km',
+                averageSpeed: avgSpeed.toFixed(1) + ' km/h',
+                fuelEfficiency: avgFuelEfficiency.toFixed(1) + ' km/L'
+            };
+
+            Object.entries(elements).forEach(([id, value]) => {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            });
+        } catch (error) {
+            console.error('Failed to update metrics:', error);
+        }
     }
 
-    calculateAverage(data) {
-        return data.reduce((a, b) => a + b, 0) / data.length;
-    }
-
-    generateReport(type) {
-        this.app.showLoading();
+    async generateReport(type) {
+        if (this.app.showLoading) this.app.showLoading();
         
-        setTimeout(() => {
+        try {
             let reportData = {};
             
             switch(type) {
                 case 'daily':
-                    reportData = this.generateDailyReport();
+                    reportData = await this.createDailyReport();
                     break;
                 case 'weekly':
-                    reportData = this.generateWeeklyReport();
+                    reportData = await this.createWeeklyReport();
                     break;
                 case 'monthly':
-                    reportData = this.generateMonthlyReport();
+                    reportData = await this.createMonthlyReport();
                     break;
                 default:
-                    reportData = this.generateCustomReport();
+                    reportData = await this.createCustomReport();
             }
             
             this.displayReport(reportData);
-            this.app.hideLoading();
-        }, 1000);
+        } catch (error) {
+            console.error('Failed to generate report:', error);
+            if (this.app.showToast) {
+                this.app.showToast('Failed to generate report: ' + error.message, 'error');
+            }
+        } finally {
+            if (this.app.hideLoading) this.app.hideLoading();
+        }
     }
 
-    generateDailyReport() {
+    async createDailyReport() {
+        if (!window.db) return { title: 'Daily Report', summary: { error: 'Database not available' } };
+        
         const today = new Date();
-        const dateStr = today.toLocaleDateString('en-US', { 
-            weekday: 'long', 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric' 
+        const trips = await window.db.getTripHistory(100);
+        const todayTrips = trips.filter(t => {
+            if (!t.start_time) return false;
+            const tripDate = new Date(parseInt(t.start_time) / 1000000);
+            return tripDate.toDateString() === today.toDateString();
         });
         
+        const totalDistance = todayTrips.reduce((sum, t) => sum + (parseFloat(t.distance) || 0), 0);
+        const totalDuration = todayTrips.reduce((sum, t) => sum + (parseInt(t.duration) || 0), 0);
+        const avgSafety = todayTrips.length > 0 
+            ? todayTrips.reduce((sum, t) => sum + (parseInt(t.safety_score) || 1000), 0) / todayTrips.length 
+            : 1000;
+        
         return {
-            title: `Daily Report - ${dateStr}`,
+            title: `Daily Report - ${today.toLocaleDateString()}`,
             summary: {
-                trips: 3,
-                distance: '112.4 km',
-                duration: '2h 45m',
-                fuelUsed: '9.2 L',
-                totalCost: '$42.50',
-                safetyScore: '925'
+                'Total Trips': todayTrips.length,
+                'Total Distance': totalDistance.toFixed(1) + ' km',
+                'Total Duration': this.formatDuration(totalDuration),
+                'Safety Score': Math.round(avgSafety)
             },
-            highlights: [
-                'Excellent driving behavior throughout the day',
-                'Fuel efficiency above average (12.2 km/L)',
-                'No harsh braking incidents detected',
-                'All trips completed within speed limits'
-            ],
-            recommendations: [
-                'Consider carpooling for your daily commute',
-                'Schedule vehicle maintenance in the next 2 weeks'
-            ]
+            highlights: todayTrips.length > 0 
+                ? [`Completed ${todayTrips.length} trip(s)`, `Covered ${totalDistance.toFixed(1)} km`]
+                : ['No trips recorded today']
         };
     }
 
-    generateWeeklyReport() {
+    async createWeeklyReport() {
+        if (!window.db) return { title: 'Weekly Report', summary: { error: 'Database not available' } };
+        
         const lastWeek = new Date();
         lastWeek.setDate(lastWeek.getDate() - 7);
         
+        const trips = await window.db.getTripHistory(200);
+        const stats = await window.db.getTripStatistics();
+        
+        const weekTrips = trips.filter(t => {
+            if (!t.start_time) return false;
+            return new Date(parseInt(t.start_time) / 1000000) >= lastWeek;
+        });
+        
+        const totalDistance = weekTrips.reduce((sum, t) => sum + (parseFloat(t.distance) || 0), 0);
+        
         return {
-            title: `Weekly Report - ${lastWeek.toLocaleDateString()} to ${new Date().toLocaleDateString()}`,
+            title: `Weekly Report`,
             summary: {
-                trips: 15,
-                distance: '625.8 km',
-                duration: '13h 20m',
-                fuelUsed: '52.3 L',
-                totalCost: '$245.60',
-                safetyScore: '912',
-                trend: '+2.5%'
+                'Total Trips': weekTrips.length,
+                'Total Distance': totalDistance.toFixed(1) + ' km',
+                'Safety Score': stats?.safety_score || 1000
             },
-            analysis: {
-                bestDay: 'Monday',
-                worstDay: 'Friday',
-                peakHour: '08:00-09:00',
-                frequentRoute: 'Home - Office',
-                costPerKm: '$0.15'
+            trends: [`${weekTrips.length} trips this week`, `${totalDistance.toFixed(1)} km traveled`]
+        };
+    }
+
+    async createMonthlyReport() {
+        if (!window.db) return { title: 'Monthly Report', summary: { error: 'Database not available' } };
+        
+        const stats = await window.db.getTripStatistics();
+        
+        return {
+            title: `Monthly Report - ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+            summary: {
+                'Total Trips': stats?.total_trips || 0,
+                'Total Distance': (stats?.total_distance || 0).toFixed(1) + ' km',
+                'Safety Score': stats?.safety_score || 1000,
+                'Average Speed': (stats?.avg_speed || 0).toFixed(1) + ' km/h'
             },
-            trends: [
-                'Safety score improved by 2.5% compared to last week',
-                'Fuel efficiency decreased slightly (11.9 km/L vs 12.2 km/L)',
-                'Night driving reduced by 15%'
+            achievements: [
+                `Completed ${stats?.total_trips || 0} trips`,
+                `Total distance: ${(stats?.total_distance || 0).toFixed(1)} km`
             ]
         };
     }
 
-    generateMonthlyReport() {
+    async createCustomReport() {
+        if (!window.db) return { title: 'Custom Report', summary: {} };
+        const stats = await window.db.getTripStatistics();
         return {
-            title: `Monthly Report - January 2024`,
+            title: `Custom Report - ${new Date().toLocaleDateString()}`,
             summary: {
-                trips: 45,
-                distance: '2,145.6 km',
-                duration: '42h 15m',
-                fuelUsed: '178.8 L',
-                totalCost: '$840.36',
-                safetyScore: '905',
-                ranking: 'Top 15%'
-            },
-            comparisons: {
-                vsLastMonth: {
-                    distance: '+8.2%',
-                    cost: '-3.5%',
-                    safety: '+4.1%',
-                    efficiency: '+2.3%'
-                },
-                vsFleetAverage: {
-                    distance: '+12.5%',
-                    cost: '-8.2%',
-                    safety: '+7.3%',
-                    efficiency: '+5.6%'
-                }
-            },
-            achievements: [
-                'Perfect safety score for 15 consecutive days',
-                'Lowest monthly fuel cost in 6 months',
-                'No traffic violations reported',
-                'Completed all scheduled maintenance'
-            ],
-            goals: [
-                'Reduce idling time by 10%',
-                'Achieve 13 km/L fuel efficiency',
-                'Maintain safety score above 920',
-                'Reduce monthly expenses by 5%'
-            ]
+                'Trips': stats?.total_trips || 0,
+                'Distance': (stats?.total_distance || 0).toFixed(1) + ' km',
+                'Safety': stats?.safety_score || 1000
+            }
         };
     }
 
     displayReport(reportData) {
-        // Create report modal
         const modal = document.createElement('div');
         modal.className = 'modal active';
         modal.style.display = 'flex';
+        modal.id = 'reportModal';
         
         modal.innerHTML = `
-            <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-content" style="max-width: 600px;">
                 <div class="modal-header">
                     <h3>${reportData.title}</h3>
-                    <button class="close" onclick="this.parentElement.parentElement.remove()">&times;</button>
+                    <button class="close" onclick="document.getElementById('reportModal').remove()">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div class="report-summary">
                         <h4>Summary</h4>
-                        <div class="summary-grid">
-                            ${Object.entries(reportData.summary).map(([key, value]) => `
-                                <div class="summary-item">
-                                    <span class="label">${this.formatLabel(key)}:</span>
-                                    <span class="value">${value}</span>
-                                </div>
-                            `).join('')}
-                        </div>
+                        ${Object.entries(reportData.summary).map(([key, value]) => `
+                            <p><strong>${key}:</strong> ${value}</p>
+                        `).join('')}
                     </div>
-                    
                     ${reportData.highlights ? `
-                    <div class="report-section">
-                        <h4>Highlights</h4>
-                        <ul>
-                            ${reportData.highlights.map(h => `<li>${h}</li>`).join('')}
-                        </ul>
-                    </div>
-                    ` : ''}
-                    
-                    ${reportData.analysis ? `
-                    <div class="report-section">
-                        <h4>Analysis</h4>
-                        <div class="analysis-grid">
-                            ${Object.entries(reportData.analysis).map(([key, value]) => `
-                                <div class="analysis-item">
-                                    <span class="label">${this.formatLabel(key)}:</span>
-                                    <span class="value">${value}</span>
-                                </div>
-                            `).join('')}
+                        <div class="report-section">
+                            <h4>Highlights</h4>
+                            <ul>${reportData.highlights.map(h => `<li>${h}</li>`).join('')}</ul>
                         </div>
-                    </div>
                     ` : ''}
-                    
                     ${reportData.trends ? `
-                    <div class="report-section">
-                        <h4>Trends</h4>
-                        <ul>
-                            ${reportData.trends.map(t => `<li>${t}</li>`).join('')}
-                        </ul>
-                    </div>
+                        <div class="report-section">
+                            <h4>Trends</h4>
+                            <ul>${reportData.trends.map(t => `<li>${t}</li>`).join('')}</ul>
+                        </div>
                     ` : ''}
-                    
-                    ${reportData.recommendations ? `
-                    <div class="report-section">
-                        <h4>Recommendations</h4>
-                        <ul>
-                            ${reportData.recommendations.map(r => `<li>${r}</li>`).join('')}
-                        </ul>
-                    </div>
-                    ` : ''}
-                    
                     ${reportData.achievements ? `
-                    <div class="report-section">
-                        <h4>Achievements</h4>
-                        <ul>
-                            ${reportData.achievements.map(a => `<li>${a}</li>`).join('')}
-                        </ul>
-                    </div>
-                    ` : ''}
-                    
-                    ${reportData.goals ? `
-                    <div class="report-section">
-                        <h4>Future Goals</h4>
-                        <ul>
-                            ${reportData.goals.map(g => `<li>${g}</li>`).join('')}
-                        </ul>
-                    </div>
+                        <div class="report-section">
+                            <h4>Achievements</h4>
+                            <ul>${reportData.achievements.map(a => `<li>${a}</li>`).join('')}</ul>
+                        </div>
                     ` : ''}
                 </div>
                 <div class="modal-footer">
-                    <button class="btn btn-secondary" onclick="this.parentElement.parentElement.parentElement.remove()">Close</button>
-                    <button class="btn btn-primary" onclick="this.exportReport('${reportData.title}')">
-                        <i class="fas fa-download"></i> Export PDF
-                    </button>
-                    <button class="btn btn-success" onclick="this.printReport('${reportData.title}')">
-                        <i class="fas fa-print"></i> Print
-                    </button>
+                    <button class="btn btn-secondary" onclick="document.getElementById('reportModal').remove()">Close</button>
                 </div>
             </div>
         `;
         
         document.body.appendChild(modal);
-        
-        // Add export and print functionality
-        modal.querySelector('.btn-primary').onclick = () => this.exportReport(reportData.title);
-        modal.querySelector('.btn-success').onclick = () => this.printReport(reportData.title);
     }
 
-    formatLabel(text) {
-        return text.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+    formatDuration(seconds) {
+        if (!seconds || seconds <= 0) return '0m';
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (hours > 0) return `${hours}h ${minutes}m`;
+        return `${minutes}m`;
     }
 
-    exportReport(title) {
-        this.app.showToast(`Exporting "${title}"...`, 'info');
-        
-        // Simulate export process
-        setTimeout(() => {
-            this.app.showToast('Report exported successfully!', 'success');
-            
-            // Create download link
-            const data = JSON.stringify(this.performanceData, null, 2);
-            const blob = new Blob([data], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `${title.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }, 1500);
-    }
-
-    printReport(title) {
-        this.app.showToast(`Preparing "${title}" for printing...`, 'info');
-        
-        setTimeout(() => {
-            const printWindow = window.open('', '_blank');
-            printWindow.document.write(`
-                <html>
-                    <head>
-                        <title>${title}</title>
-                        <style>
-                            body { font-family: Arial, sans-serif; margin: 20px; }
-                            h1 { color: #333; border-bottom: 2px solid #4361ee; padding-bottom: 10px; }
-                            .summary { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0; }
-                            .section { margin: 20px 0; }
-                            .item { margin: 10px 0; }
-                            .label { font-weight: bold; color: #666; }
-                            .value { color: #333; }
-                            @media print {
-                                .no-print { display: none; }
-                                body { margin: 0; }
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <h1>${title}</h1>
-                        <div class="summary">
-                            <h3>Performance Summary</h3>
-                            <div class="item">
-                                <span class="label">Total Distance:</span>
-                                <span class="value">${this.performanceData.distances.reduce((a, b) => a + b, 0).toFixed(1)} km</span>
-                            </div>
-                            <div class="item">
-                                <span class="label">Average Safety Score:</span>
-                                <span class="value">${this.calculateAverage(this.performanceData.safetyScores).toFixed(0)}</span>
-                            </div>
-                            <div class="item">
-                                <span class="label">Fuel Efficiency:</span>
-                                <span class="value">${this.calculateAverage(this.performanceData.fuelEfficiency).toFixed(1)} km/L</span>
-                            </div>
-                        </div>
-                        <div class="section">
-                            <h3>Detailed Analysis</h3>
-                            <p>Report generated on ${new Date().toLocaleString()}</p>
-                            <p>This report contains comprehensive analytics of your driving performance.</p>
-                        </div>
-                        <div class="no-print">
-                            <button onclick="window.print()">Print Report</button>
-                            <button onclick="window.close()">Close</button>
-                        </div>
-                    </body>
-                </html>
-            `);
-            printWindow.document.close();
-        }, 1000);
-    }
-
-    updateCharts() {
+    async updateCharts() {
         if (this.app.currentPage === 'reports') {
-            this.updatePerformanceChart();
-            this.updateMetrics();
+            await this.loadRealData();
+            await this.updatePerformanceChart();
+            await this.updateMetrics();
         }
     }
-
-    // Public methods for global access
-    generateDailyReport() { return this.generateReport('daily'); }
-    generateWeeklyReport() { return this.generateReport('weekly'); }
-    generateMonthlyReport() { return this.generateReport('monthly'); }
-    generateCustomReport() { return this.generateReport('custom'); }
-}
-
-// Initialize analytics manager
-if (window.app) {
-    window.analytics = new AnalyticsManager(window.app);
 }

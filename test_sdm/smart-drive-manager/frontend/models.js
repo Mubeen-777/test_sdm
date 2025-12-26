@@ -57,36 +57,47 @@ class ModalManager {
     }
 
     showModal(modalId, data = {}) {
-        this.closeModal();
+        // Close any existing modal first
+        if (this.currentModal && this.currentModal.id !== modalId) {
+            this.closeModal();
+        }
         
         const modal = document.getElementById(modalId);
-        if (!modal) return;
+        if (!modal) {
+            console.error('Modal not found:', modalId);
+            return;
+        }
 
         this.currentModal = modal;
         modal.style.display = 'flex';
+        modal.classList.add('active');
         
         // Populate form data if provided
         if (data && Object.keys(data).length > 0) {
             this.populateForm(modalId, data);
         }
         
-        // Add active class after display
+        // Focus first input after a small delay
         setTimeout(() => {
-            modal.classList.add('active');
-        }, 10);
-        
-        // Focus first input
-        const firstInput = modal.querySelector('input, select, textarea');
-        if (firstInput) firstInput.focus();
+            const firstInput = modal.querySelector('input, select, textarea');
+            if (firstInput) firstInput.focus();
+        }, 100);
     }
 
-    closeModal() {
-        if (this.currentModal) {
-            this.currentModal.classList.remove('active');
-            setTimeout(() => {
-                this.currentModal.style.display = 'none';
+    closeModal(modalId = null) {
+        let modalToClose = this.currentModal;
+        
+        if (modalId) {
+            modalToClose = document.getElementById(modalId);
+        }
+        
+        if (modalToClose) {
+            modalToClose.classList.remove('active');
+            modalToClose.style.display = 'none';
+            
+            if (modalToClose === this.currentModal) {
                 this.currentModal = null;
-            }, 300);
+            }
         }
     }
 
@@ -128,11 +139,7 @@ class ModalManager {
                     throw new Error('Failed to save settings');
                 }
             } else {
-                // Mock success for demo
-                this.app.userData.name = fullName;
-                this.app.updateUserUI();
-                this.app.showToast('Account settings saved successfully!', 'success');
-                this.closeModal();
+                throw new Error('Database API not available');
             }
         } catch (error) {
             this.app.showToast('Failed to save settings: ' + error.message, 'error');
@@ -164,17 +171,24 @@ class ModalManager {
         this.app.showLoading();
         
         try {
-            // Simulate password change
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            this.app.showToast('Password updated successfully!', 'success');
-            
-            // Clear form
-            document.getElementById('currentPassword').value = '';
-            document.getElementById('newPassword').value = '';
-            document.getElementById('confirmPassword').value = '';
-            
-            this.closeModal();
+            // Use real backend API to change password
+            if (window.db) {
+                const success = await window.db.changePassword(currentPassword, newPassword);
+                if (success) {
+                    this.app.showToast('Password updated successfully!', 'success');
+                    
+                    // Clear form
+                    document.getElementById('currentPassword').value = '';
+                    document.getElementById('newPassword').value = '';
+                    document.getElementById('confirmPassword').value = '';
+                    
+                    this.closeModal();
+                } else {
+                    throw new Error('Password change failed');
+                }
+            } else {
+                throw new Error('Database not available');
+            }
         } catch (error) {
             this.app.showToast('Failed to update password: ' + error.message, 'error');
         } finally {
@@ -203,8 +217,8 @@ class ModalManager {
                 if (result) {
                     this.app.liveData.trip_active = true;
                     this.app.liveData.trip_id = result.trip_id;
-                    this.app.updateDashboardUI();
-                    this.app.setupTripControls();
+                    this.app.updateTripControls();
+                    this.app.updateDashboard();
                     
                     this.app.showToast('Trip started successfully!', 'success');
                     this.closeModal();
@@ -212,14 +226,7 @@ class ModalManager {
                     throw new Error('Failed to start trip');
                 }
             } else {
-                // Mock success for demo
-                this.app.liveData.trip_active = true;
-                this.app.liveData.trip_id = Date.now();
-                this.app.updateDashboardUI();
-                this.app.setupTripControls();
-                
-                this.app.showToast('Trip started successfully!', 'success');
-                this.closeModal();
+                throw new Error('Database API not available');
             }
         } catch (error) {
             this.app.showToast('Failed to start trip: ' + error.message, 'error');
@@ -232,11 +239,13 @@ class ModalManager {
         this.showModal('addVehicleModal');
     }
 
-    showAddExpenseModal() {
+    async showAddExpenseModal() {
+        await this.populateVehicleSelect('expenseVehicle');
         this.showModal('addExpenseModal');
     }
 
-    showAddFuelExpenseModal() {
+    async showAddFuelExpenseModal() {
+        await this.populateVehicleSelect('fuelExpenseVehicle');
         this.showModal('addFuelExpenseModal');
     }
 
@@ -248,7 +257,8 @@ class ModalManager {
         this.showModal('addDriverModal');
     }
 
-    showReportIncidentModal() {
+    async showReportIncidentModal() {
+        await this.populateVehicleSelect('incidentVehicle');
         this.showModal('reportIncidentModal');
     }
 
@@ -288,9 +298,7 @@ class ModalManager {
                     throw new Error('License plate may already exist');
                 }
             } else {
-                // Mock success for demo
-                this.app.showToast('Vehicle added successfully!', 'success');
-                this.closeModal();
+                throw new Error('Database API not available');
             }
         } catch (error) {
             this.app.showToast('Failed to add vehicle: ' + error.message, 'error');
@@ -334,9 +342,7 @@ class ModalManager {
                     throw new Error('Failed to add expense');
                 }
             } else {
-                // Mock success for demo
-                this.app.showToast('Expense added successfully!', 'success');
-                this.closeModal();
+                throw new Error('Database API not available');
             }
         } catch (error) {
             this.app.showToast('Failed to add expense: ' + error.message, 'error');
@@ -381,9 +387,7 @@ class ModalManager {
                     throw new Error('Failed to report incident');
                 }
             } else {
-                // Mock success for demo
-                this.app.showToast('Incident reported successfully!', 'success');
-                this.closeModal();
+                throw new Error('Database API not available');
             }
         } catch (error) {
             this.app.showToast('Failed to report incident: ' + error.message, 'error');
@@ -393,7 +397,7 @@ class ModalManager {
     }
 
     // Helper methods
-    populateVehicleSelect(selectId, includeEmpty = true) {
+    async populateVehicleSelect(selectId, includeEmpty = true) {
         const select = document.getElementById(selectId);
         if (!select) return;
 
@@ -406,18 +410,19 @@ class ModalManager {
             select.appendChild(option);
         }
 
-        // Mock vehicle options
-        const vehicles = [
-            { id: 1, text: 'Toyota Corolla (ABC-123)' },
-            { id: 2, text: 'Honda Civic (XYZ-789)' }
-        ];
-
-        vehicles.forEach(vehicle => {
-            const option = document.createElement('option');
-            option.value = vehicle.id;
-            option.textContent = vehicle.text;
-            select.appendChild(option);
-        });
+        if (window.db) {
+            try {
+                const vehicles = await window.db.getVehicleOptions();
+                vehicles.forEach(vehicle => {
+                    const option = document.createElement('option');
+                    option.value = vehicle.value;
+                    option.textContent = vehicle.text;
+                    select.appendChild(option);
+                });
+            } catch (error) {
+                console.error('Failed to load vehicles:', error);
+            }
+        }
     }
 
     populateCategorySelect(selectId, includeEmpty = true) {

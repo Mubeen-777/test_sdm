@@ -4,6 +4,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const cors = require('cors');
 const fs = require('fs');
+const http = require('http');
 
 const app = express();
 
@@ -16,9 +17,60 @@ app.use(express.static(__dirname));
 // Parse JSON bodies
 app.use(express.json());
 
-// Fix: Serve index.html for the root route
+// Backend server configuration
+const BACKEND_HOST = 'localhost';
+const BACKEND_PORT = 8080;
+
+// API Proxy - Forward all POST requests to /api to the C++ backend
+app.post('/api', (req, res) => {
+    const postData = JSON.stringify(req.body);
+    
+    const options = {
+        hostname: BACKEND_HOST,
+        port: BACKEND_PORT,
+        path: '/',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(postData)
+        },
+        timeout: 10000
+    };
+
+    const proxyReq = http.request(options, (proxyRes) => {
+        let data = '';
+        proxyRes.on('data', (chunk) => { data += chunk; });
+        proxyRes.on('end', () => {
+            res.setHeader('Content-Type', 'application/json');
+            res.status(proxyRes.statusCode).send(data);
+        });
+    });
+
+    proxyReq.on('error', (err) => {
+        console.error('Backend connection error:', err.message);
+        res.status(503).json({
+            status: 'error',
+            code: 'BACKEND_UNAVAILABLE',
+            message: 'Cannot connect to backend server. Make sure the C++ server is running on port 8080.'
+        });
+    });
+
+    proxyReq.on('timeout', () => {
+        proxyReq.destroy();
+        res.status(504).json({
+            status: 'error',
+            code: 'BACKEND_TIMEOUT',
+            message: 'Backend server request timed out'
+        });
+    });
+
+    proxyReq.write(postData);
+    proxyReq.end();
+});
+
+// Redirect root to login page (authentication happens client-side)
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    res.sendFile(path.join(__dirname, 'login.html'));
 });
 
 // Fix: Serve login.html directly
@@ -36,233 +88,10 @@ app.get('/trips', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// Mock API endpoints for frontend testing
-app.post('/api/login', (req, res) => {
-    console.log('Login attempt:', req.body);
-    
-    const response = {
-        status: 'success',
-        data: {
-            session_id: 'mock_session_' + Date.now(),
-            driver_id: 1,
-            name: 'Mubeen Butt',
-            role: '1',
-            username: req.body.username || 'admin'
-        },
-        message: 'Login successful'
-    };
-    
-    res.json(response);
-});
-
-app.post('/api/verify', (req, res) => {
-    console.log('Session verification:', req.body);
-    
-    const response = {
-        status: 'success',
-        data: { valid: true, user_id: 1 }
-    };
-    
-    res.json(response);
-});
-
-app.get('/api/stats', (req, res) => {
-    const stats = {
-        speed: Math.floor(Math.random() * 120),
-        acceleration: (Math.random() * 6 - 3).toFixed(2),
-        safety_score: 850 + Math.floor(Math.random() * 150),
-        lane_status: 'CENTERED',
-        rapid_accel_count: 2,
-        hard_brake_count: 1,
-        lane_departures: 0,
-        trip_active: false,
-        warning_active: false,
-        distance: '45.2 km'
-    };
-    
-    res.json(stats);
-});
-
-app.post('/api/trip/start', (req, res) => {
-    console.log('Starting trip:', req.body);
-    
-    const response = {
-        status: 'success',
-        data: {
-            trip_id: Date.now(),
-            start_time: new Date().toISOString()
-        },
-        message: 'Trip started successfully'
-    };
-    
-    res.json(response);
-});
-
-app.post('/api/trip/stop', (req, res) => {
-    console.log('Stopping trip:', req.body);
-    
-    const response = {
-        status: 'success',
-        data: {
-            trip_id: req.body.trip_id || Date.now(),
-            end_time: new Date().toISOString(),
-            distance: 45.2,
-            duration: '1:30:00'
-        },
-        message: 'Trip ended successfully'
-    };
-    
-    res.json(response);
-});
-
-app.post('/api/camera/start', (req, res) => {
-    console.log('Starting camera');
-    
-    const response = {
-        status: 'success',
-        data: { camera_active: true },
-        message: 'Camera started successfully'
-    };
-    
-    res.json(response);
-});
-
-app.post('/api/camera/stop', (req, res) => {
-    console.log('Stopping camera');
-    
-    const response = {
-        status: 'success',
-        data: { camera_active: false },
-        message: 'Camera stopped'
-    };
-    
-    res.json(response);
-});
-
-app.get('/api/trips/recent', (req, res) => {
-    const trips = {
-        data: [
-            {
-                trip_id: 1,
-                start_time: '2024-01-15 09:30:00',
-                end_time: '2024-01-15 11:00:00',
-                distance: 45.2,
-                duration: '1:30:00',
-                avg_speed: 60,
-                safety_score: 920
-            },
-            {
-                trip_id: 2,
-                start_time: '2024-01-14 14:15:00',
-                end_time: '2024-01-14 15:30:00',
-                distance: 38.5,
-                duration: '1:15:00',
-                avg_speed: 55,
-                safety_score: 880
-            },
-            {
-                trip_id: 3,
-                start_time: '2024-01-13 08:45:00',
-                end_time: '2024-01-13 10:15:00',
-                distance: 52.1,
-                duration: '1:30:00',
-                avg_speed: 65,
-                safety_score: 950
-            }
-        ]
-    };
-    
-    res.json(trips);
-});
-
-app.post('/api/logout', (req, res) => {
-    console.log('Logout request');
-    
-    const response = {
-        status: 'success',
-        message: 'Logged out successfully'
-    };
-    
-    res.json(response);
-});
-
-// Camera stream endpoint - returns a placeholder
-app.get('/api/camera/frame', (req, res) => {
-    // Return a placeholder image or message
-    res.json({
-        status: 'success',
-        message: 'Camera frame endpoint (mock)',
-        timestamp: Date.now()
-    });
-});
-
-app.get('/api/camera/stream', (req, res) => {
-    res.json({
-        status: 'success',
-        message: 'Camera streaming not implemented in mock server'
-    });
-});
-
-// Additional endpoints for completeness
-app.get('/api/vehicles', (req, res) => {
-    const vehicles = {
-        data: [
-            {
-                vehicle_id: 1,
-                make: 'Toyota',
-                model: 'Corolla',
-                year: 2020,
-                plate: 'ABC-123',
-                mileage: 45230
-            },
-            {
-                vehicle_id: 2,
-                make: 'Honda',
-                model: 'Civic',
-                year: 2019,
-                plate: 'XYZ-789',
-                mileage: 52450
-            }
-        ]
-    };
-    
-    res.json(vehicles);
-});
-
-app.get('/api/driver/profile', (req, res) => {
-    const profile = {
-        data: {
-            driver_id: 1,
-            name: 'Mubeen Butt',
-            email: 'mubeen@example.com',
-            license_number: 'DL-123456',
-            total_trips: 15,
-            total_distance: 625.8,
-            safety_score: 920,
-            join_date: '2023-01-15'
-        }
-    };
-    
-    res.json(profile);
-});
-
-// FIX: Changed from '/*' to '/:any' for catch-all route
-app.get('/:any', (req, res) => {
-    // Don't handle API routes here
-    if (req.path.startsWith('/api/')) {
-        res.status(404).json({ error: 'API endpoint not found' });
-        return;
-    }
-    
-    // Check if file exists in static directory
-    const filePath = path.join(__dirname, req.path);
-    if (fs.existsSync(filePath) && !req.path.includes('.')) {
-        // Serve static file if it exists
-        res.sendFile(filePath);
-    } else {
-        // Serve index.html for SPA routing
-        res.sendFile(path.join(__dirname, 'index.html'));
-    }
+// Catch-all route for SPA routing (must be last)
+app.use((req, res, next) => {
+    // Serve index.html for all other routes (SPA routing)
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
 
 // Start C++ WebSocket bridge process (optional)
@@ -300,7 +129,7 @@ function startBridge() {
                 console.log(`Bridge process exited with code ${code}`);
             });
         } else {
-            console.log('WebSocket bridge not found, running in mock mode only');
+            console.log('WebSocket bridge not found - real-time features require websocket_bridge to be running');
             console.log('Note: For real-time data, run ./websocket_bridge manually');
         }
     } catch (err) {
@@ -333,11 +162,11 @@ app.listen(PORT, () => {
     console.log(`║  Login Page:       http://localhost:${PORT}/login      `);
     console.log(`║  Dashboard:        http://localhost:${PORT}/dashboard  `);
     console.log(`╠══════════════════════════════════════════════════════╣`);
+    console.log(`║  Backend API:      http://localhost:8080              ║`);
     console.log(`║  WebSocket Bridge: ws://localhost:8081               ║`);
     console.log(`╠══════════════════════════════════════════════════════╣`);
-    console.log(`║  Login Credentials:                                  ║`);
-    console.log(`║    Username: admin                                   ║`);
-    console.log(`║    Password: admin123                                ║`);
+    console.log(`║  NOTE: Make sure the C++ backend server is running   ║`);
+    console.log(`║        on port 8080 before using the frontend        ║`);
     console.log(`╚══════════════════════════════════════════════════════╝`);
     
     // Try to start bridge

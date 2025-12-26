@@ -1,15 +1,23 @@
-// camera.js - Camera and Vision System
+// camera.js - Camera and Vision System (REAL DATA ONLY - NO SIMULATION)
+// This module displays REAL data from the WebSocket bridge (C++ OpenCV backend)
+// All detection data comes from the actual camera and computer vision processing
+
 class CameraManager {
     constructor(app) {
         this.app = app;
         this.visionChart = null;
         this.detectionLog = [];
+        this.chartData = {
+            laneDeviation: [],
+            driverAttention: []
+        };
+        this.maxDataPoints = 20;
     }
 
     initVisionSystem() {
         this.initVisionChart();
         this.setupDetectionOverlay();
-        this.startDetectionSimulation();
+        console.log('📷 Vision system initialized - waiting for real camera data from WebSocket');
     }
 
     initVisionChart() {
@@ -18,14 +26,15 @@ class CameraManager {
 
         const ctx = canvas.getContext('2d');
         
+        // Initialize with empty data - will be populated by real WebSocket data
         this.visionChart = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: Array.from({length: 20}, (_, i) => (i + 1).toString()),
+                labels: [],
                 datasets: [
                     {
                         label: 'Lane Deviation %',
-                        data: this.generateRandomData(20, 0, 12),
+                        data: [],
                         borderColor: '#4361ee',
                         backgroundColor: 'rgba(67, 97, 238, 0.1)',
                         fill: true,
@@ -33,7 +42,7 @@ class CameraManager {
                     },
                     {
                         label: 'Driver Attention %',
-                        data: this.generateRandomData(20, 85, 100),
+                        data: [],
                         borderColor: '#4cc9f0',
                         backgroundColor: 'rgba(76, 201, 240, 0.1)',
                         fill: true,
@@ -44,6 +53,7 @@ class CameraManager {
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                animation: false, // Disable animation for real-time performance
                 plugins: {
                     legend: {
                         display: true,
@@ -62,7 +72,7 @@ class CameraManager {
                     x: {
                         title: {
                             display: true,
-                            text: 'Time (seconds)'
+                            text: 'Time'
                         }
                     }
                 }
@@ -71,71 +81,73 @@ class CameraManager {
     }
 
     setupDetectionOverlay() {
-        // Setup lane detection visualization
-        const laneDetection = document.getElementById('laneDetection');
-        if (laneDetection) {
-            // Create lane visualization
-            this.createLaneVisualization();
-        }
-    }
-
-    createLaneVisualization() {
         const container = document.querySelector('.vision-container');
         if (!container) return;
 
-        // Create lane center line
+        // Create lane visualization elements (will be updated by real data)
         const centerLine = document.createElement('div');
         centerLine.className = 'lane-center-line';
+        centerLine.id = 'laneCenterLine';
         container.appendChild(centerLine);
 
-        // Create lane boundaries
         const leftBoundary = document.createElement('div');
         leftBoundary.className = 'lane-boundary lane-left';
+        leftBoundary.id = 'laneLeftBoundary';
         container.appendChild(leftBoundary);
 
         const rightBoundary = document.createElement('div');
         rightBoundary.className = 'lane-boundary lane-right';
+        rightBoundary.id = 'laneRightBoundary';
         container.appendChild(rightBoundary);
     }
 
-    startDetectionSimulation() {
-        if (this.detectionInterval) clearInterval(this.detectionInterval);
+    // Called by WebSocket when real detection data arrives from C++ backend
+    updateFromWebSocket(detectionData) {
+        if (!detectionData) return;
 
-        this.detectionInterval = setInterval(() => {
-            if (this.app.isCameraActive && this.app.currentPage === 'camera') {
-                this.simulateDetection();
-            }
-        }, 1000);
-    }
+        const {
+            lane_deviation = 0,
+            objects_detected = 0,
+            driver_attention = 100,
+            drowsiness_level = 0,
+            lane_status = 'CENTERED',
+            detected_objects = []
+        } = detectionData;
 
-    simulateDetection() {
-        // Simulate random detection data
-        const laneDeviation = Math.random() * 15;
-        const objectsDetected = Math.floor(Math.random() * 5);
-        const driverAttention = 85 + Math.random() * 15;
-        const drowsinessLevel = Math.random() * 10;
-
-        // Update display
-        this.updateDetectionDisplay(laneDeviation, objectsDetected, driverAttention, drowsinessLevel);
+        // Update display with REAL data
+        this.updateDetectionDisplay(lane_deviation, objects_detected, driver_attention, drowsiness_level);
 
         // Add to log
-        this.addToDetectionLog(laneDeviation, objectsDetected);
+        this.addToDetectionLog(lane_deviation, objects_detected, lane_status);
 
-        // Update chart
-        this.updateVisionChart(laneDeviation, driverAttention);
+        // Update chart with REAL data
+        this.updateVisionChart(lane_deviation, driver_attention);
 
-        // Check for warnings
-        this.checkForWarnings(laneDeviation, driverAttention, drowsinessLevel);
+        // Update object detection overlay with REAL detected objects
+        if (detected_objects && detected_objects.length > 0) {
+            this.updateObjectDetection(detected_objects);
+        }
+
+        // Check for warnings based on REAL data
+        this.checkForWarnings(lane_deviation, driver_attention, drowsiness_level);
+
+        // Update lane visualization
+        this.updateLaneVisualization(lane_status, lane_deviation);
     }
 
     updateDetectionDisplay(laneDeviation, objectsDetected, driverAttention, drowsinessLevel) {
-        document.getElementById('laneDeviation').textContent = laneDeviation.toFixed(1) + '%';
-        document.getElementById('objectsDetected').textContent = objectsDetected.toString();
-        document.getElementById('driverAttention').textContent = driverAttention.toFixed(0) + '%';
-        document.getElementById('drowsinessLevel').textContent = drowsinessLevel.toFixed(1) + '%';
+        const laneDeviationEl = document.getElementById('laneDeviation');
+        const objectsDetectedEl = document.getElementById('objectsDetected');
+        const driverAttentionEl = document.getElementById('driverAttention');
+        const drowsinessLevelEl = document.getElementById('drowsinessLevel');
+
+        if (laneDeviationEl) laneDeviationEl.textContent = laneDeviation.toFixed(1) + '%';
+        if (objectsDetectedEl) objectsDetectedEl.textContent = objectsDetected.toString();
+        if (driverAttentionEl) driverAttentionEl.textContent = driverAttention.toFixed(0) + '%';
+        if (drowsinessLevelEl) drowsinessLevelEl.textContent = drowsinessLevel.toFixed(1) + '%';
     }
 
-    addToDetectionLog(laneDeviation, objectsDetected) {
+    addToDetectionLog(laneDeviation, objectsDetected, laneStatus) {
         const logContainer = document.getElementById('detectionLog');
         if (!logContainer) return;
 
@@ -149,13 +161,13 @@ class CameraManager {
         let type = 'info';
 
         if (laneDeviation > 10) {
-            message = `High lane deviation detected: ${laneDeviation.toFixed(1)}%`;
+            message = `⚠️ High lane deviation: ${laneDeviation.toFixed(1)}%`;
             type = 'warning';
         } else if (objectsDetected > 3) {
             message = `Multiple objects detected: ${objectsDetected}`;
             type = 'info';
         } else {
-            message = `Normal driving conditions. Lane deviation: ${laneDeviation.toFixed(1)}%`;
+            message = `Lane: ${laneStatus} | Deviation: ${laneDeviation.toFixed(1)}%`;
             type = 'info';
         }
 
@@ -168,7 +180,7 @@ class CameraManager {
         logContainer.insertBefore(logEntry, logContainer.firstChild);
 
         // Limit log entries
-        if (logContainer.children.length > 20) {
+        while (logContainer.children.length > 50) {
             logContainer.removeChild(logContainer.lastChild);
         }
 
@@ -189,40 +201,57 @@ class CameraManager {
     updateVisionChart(laneDeviation, driverAttention) {
         if (!this.visionChart) return;
 
-        // Remove first data point and add new one
-        this.visionChart.data.labels.push((this.visionChart.data.labels.length + 1).toString());
-        this.visionChart.data.labels.shift();
+        const now = new Date().toLocaleTimeString();
 
+        // Add new data point
+        this.visionChart.data.labels.push(now);
         this.visionChart.data.datasets[0].data.push(laneDeviation);
-        this.visionChart.data.datasets[0].data.shift();
-
         this.visionChart.data.datasets[1].data.push(driverAttention);
-        this.visionChart.data.datasets[1].data.shift();
+
+        // Keep only last N data points
+        while (this.visionChart.data.labels.length > this.maxDataPoints) {
+            this.visionChart.data.labels.shift();
+            this.visionChart.data.datasets[0].data.shift();
+            this.visionChart.data.datasets[1].data.shift();
+        }
 
         this.visionChart.update('none');
     }
 
-    checkForWarnings(laneDeviation, driverAttention, drowsinessLevel) {
-        if (laneDeviation > 12) {
-            this.app.showAlert(`High lane deviation: ${laneDeviation.toFixed(1)}%`, 'warning');
-            this.app.playAlertSound();
-        }
-
-        if (driverAttention < 70) {
-            this.app.showAlert(`Low driver attention: ${driverAttention.toFixed(0)}%`, 'warning');
-            this.app.playAlertSound();
-        }
-
-        if (drowsinessLevel > 8) {
-            this.app.showAlert(`High drowsiness level: ${drowsinessLevel.toFixed(1)}%`, 'danger');
-            this.app.playAlertSound();
+    updateLaneVisualization(laneStatus, deviation) {
+        const centerLine = document.getElementById('laneCenterLine');
+        if (centerLine) {
+            // Shift center line based on real deviation
+            const offset = (deviation / 100) * 50; // Max 50% offset
+            centerLine.style.transform = `translateX(${offset}px)`;
+            
+            // Color based on status
+            if (laneStatus === 'LEFT' || laneStatus === 'RIGHT') {
+                centerLine.style.backgroundColor = '#f8961e'; // Warning
+            } else if (laneStatus === 'DEPARTURE') {
+                centerLine.style.backgroundColor = '#f72585'; // Danger
+            } else {
+                centerLine.style.backgroundColor = '#4cc9f0'; // Normal
+            }
         }
     }
 
-    generateRandomData(count, min, max) {
-        return Array.from({length: count}, () => 
-            Math.floor(Math.random() * (max - min + 1)) + min
-        );
+    checkForWarnings(laneDeviation, driverAttention, drowsinessLevel) {
+        // Only alert on significant real events
+        if (laneDeviation > 12) {
+            this.app.showAlert(`⚠️ High lane deviation: ${laneDeviation.toFixed(1)}%`, 'warning');
+            if (this.app.playAlertSound) this.app.playAlertSound();
+        }
+
+        if (driverAttention < 70) {
+            this.app.showAlert(`⚠️ Low driver attention: ${driverAttention.toFixed(0)}%`, 'warning');
+            if (this.app.playAlertSound) this.app.playAlertSound();
+        }
+
+        if (drowsinessLevel > 8) {
+            this.app.showAlert(`🚨 High drowsiness detected: ${drowsinessLevel.toFixed(1)}%`, 'danger');
+            if (this.app.playAlertSound) this.app.playAlertSound();
+        }
     }
 
     updateObjectDetection(objects) {
@@ -238,42 +267,27 @@ class CameraManager {
             box.style.top = `${obj.y}%`;
             box.style.width = `${obj.width}%`;
             box.style.height = `${obj.height}%`;
+            
+            // Color based on object type
+            if (obj.type === 'Pedestrian') {
+                box.style.borderColor = '#f72585';
+            } else if (obj.type === 'Car' || obj.type === 'Truck') {
+                box.style.borderColor = '#4361ee';
+            }
+            
             box.innerHTML = `<span>${obj.type} ${obj.confidence}%</span>`;
             container.appendChild(box);
         });
     }
 
-    simulateObjectDetection() {
-        const objects = [];
-        const objectTypes = ['Car', 'Pedestrian', 'Bicycle', 'Truck', 'Motorcycle'];
-
-        // Generate 0-3 random objects
-        const numObjects = Math.floor(Math.random() * 4);
-        for (let i = 0; i < numObjects; i++) {
-            objects.push({
-                type: objectTypes[Math.floor(Math.random() * objectTypes.length)],
-                x: Math.random() * 70 + 10,
-                y: Math.random() * 70 + 10,
-                width: Math.random() * 15 + 5,
-                height: Math.random() * 15 + 5,
-                confidence: Math.floor(Math.random() * 30) + 70
-            });
-        }
-
-        this.updateObjectDetection(objects);
-    }
-
     // Public methods
     startVisionProcessing() {
-        this.startDetectionSimulation();
-        this.app.showToast('Vision processing started', 'success');
+        console.log('📷 Vision processing active - receiving real data from WebSocket');
+        this.app.showToast('Vision processing active', 'success');
     }
 
     stopVisionProcessing() {
-        if (this.detectionInterval) {
-            clearInterval(this.detectionInterval);
-            this.detectionInterval = null;
-        }
+        console.log('📷 Vision processing stopped');
         this.app.showToast('Vision processing stopped', 'info');
     }
 
@@ -291,6 +305,17 @@ class CameraManager {
         }
         
         this.app.showToast(`Night vision ${isNightVision ? 'enabled' : 'disabled'}`, 'info');
+    }
+
+    // Clear all data
+    reset() {
+        this.detectionLog = [];
+        if (this.visionChart) {
+            this.visionChart.data.labels = [];
+            this.visionChart.data.datasets[0].data = [];
+            this.visionChart.data.datasets[1].data = [];
+            this.visionChart.update();
+        }
     }
 }
 

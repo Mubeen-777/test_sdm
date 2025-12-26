@@ -380,14 +380,22 @@ public:
                                         trip.sharp_turn_count;
         }
 
-        if (stats.total_trips > 0)
+        if (stats.total_trips > 0 && stats.total_duration > 0)
         {
             stats.avg_speed = (stats.total_distance / stats.total_duration) * 3600;
         }
+        else
+        {
+            stats.avg_speed = 0;
+        }
 
-        if (stats.total_fuel > 0)
+        if (stats.total_fuel > 0 && stats.total_distance > 0)
         {
             stats.avg_fuel_efficiency = stats.total_distance / stats.total_fuel;
+        }
+        else
+        {
+            stats.avg_fuel_efficiency = 0;
         }
 
         // Calculate safety score (0-1000)

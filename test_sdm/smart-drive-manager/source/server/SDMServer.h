@@ -382,6 +382,13 @@ private:
     {
         try
         {
+            // Check for OPTIONS preflight request (CORS)
+            if (request.request_data.find("OPTIONS") == 0)
+            {
+                send_cors_preflight(request.client_socket);
+                return;
+            }
+
             string response = request_handler_->handle_request(
                 request.request_data,
                 request.client_ip);
@@ -400,10 +407,12 @@ private:
 
     void send_response(int socket, const string &response)
     {
-
         string http_response =
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: application/json\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
             "Content-Length: " +
             to_string(response.length()) + "\r\n"
                                            "Connection: close\r\n"
@@ -418,11 +427,27 @@ private:
     {
         string response =
             "HTTP/1.1 " + to_string(code) + " " + status + "\r\n"
-                                                           "Content-Type: application/json\r\n"
-                                                           "Connection: close\r\n"
-                                                           "\r\n"
-                                                           "{\"error\":\"" +
-            message + "\"}";
+            "Content-Type: application/json\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "{\"error\":\"" + message + "\"}";
+
+        send(socket, response.c_str(), response.length(), 0);
+    }
+
+    void send_cors_preflight(int socket)
+    {
+        string response =
+            "HTTP/1.1 204 No Content\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+            "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
+            "Access-Control-Max-Age: 86400\r\n"
+            "Connection: close\r\n"
+            "\r\n";
 
         send(socket, response.c_str(), response.length(), 0);
     }

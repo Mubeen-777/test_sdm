@@ -16,13 +16,14 @@ document.addEventListener('DOMContentLoaded', () => {
         submitBtn.disabled = true;
         
         try {
-            // Try to authenticate
-            const response = await fetch('http://localhost:8080/api/login', {
+            // Use proxy endpoint to avoid CORS issues
+            const response = await fetch('/api', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
+                    operation: 'user_login',
                     username: username,
                     password: password
                 })
@@ -34,17 +35,15 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const result = await response.json();
             
-            if (result.status === 'success') {
-                // Store session data
+            if (result.status === 'success' && result.data) {
                 localStorage.setItem('session_id', result.data.session_id);
                 localStorage.setItem('user_data', JSON.stringify({
-                    driver_id: result.data.driver_id,
-                    name: result.data.name,
-                    role: result.data.role,
+                    driver_id: parseInt(result.data.driver_id) || 0,
+                    name: result.data.name || username,
+                    role: result.data.role || '0',
                     username: username
                 }));
                 
-                // Redirect to main app
                 window.location.href = 'index.html';
             } else {
                 errorMessage.textContent = result.message || 'Invalid credentials';
@@ -52,31 +51,22 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (error) {
             console.error('Login error:', error);
-            errorMessage.textContent = 'Connection failed. Make sure backend is running.';
-            errorMessage.style.display = 'block';
-            
-            // For demo purposes, allow login without backend
-            if (username === 'admin' && password === 'admin123') {
-                localStorage.setItem('session_id', 'demo_session_' + Date.now());
-                localStorage.setItem('user_data', JSON.stringify({
-                    driver_id: 1,
-                    name: 'Mubeen Butt',
-                    role: '1',
-                    username: 'admin'
-                }));
-                window.location.href = 'index.html';
+            let errorMsg = 'Connection failed. ';
+            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                errorMsg += 'Cannot connect to backend server. Please ensure:\n';
+                errorMsg += '1. Backend server is running on port 8080\n';
+                errorMsg += '2. No firewall is blocking the connection\n';
+                errorMsg += '3. Check browser console for CORS errors';
+            } else {
+                errorMsg += error.message;
             }
+            errorMessage.textContent = errorMsg;
+            errorMessage.style.display = 'block';
+            errorMessage.style.whiteSpace = 'pre-line';
         } finally {
             submitBtn.innerHTML = originalText;
             submitBtn.disabled = false;
         }
     });
     
-    // Auto-login for development
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('auto') === '1') {
-        document.getElementById('username').value = 'admin';
-        document.getElementById('password').value = 'admin123';
-        loginForm.dispatchEvent(new Event('submit'));
-    }
 });
