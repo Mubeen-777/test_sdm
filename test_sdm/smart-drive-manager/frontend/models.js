@@ -1,0 +1,486 @@
+// modals.js - Modal Management System
+class ModalManager {
+    constructor(app) {
+        this.app = app;
+        this.currentModal = null;
+        this.init();
+    }
+
+    init() {
+        this.setupModalEvents();
+        this.setupFormHandlers();
+    }
+
+    setupModalEvents() {
+        // Close modal on outside click
+        document.addEventListener('click', (e) => {
+            if (this.currentModal && e.target.classList.contains('modal')) {
+                this.closeModal();
+            }
+        });
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.currentModal) {
+                this.closeModal();
+            }
+        });
+    }
+
+    setupFormHandlers() {
+        // Account settings form
+        const accountForm = document.getElementById('accountSettingsForm');
+        if (accountForm) {
+            accountForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.saveAccountSettings();
+            });
+        }
+
+        // Security settings form
+        const securityForm = document.getElementById('securitySettingsForm');
+        if (securityForm) {
+            securityForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.updateSecuritySettings();
+            });
+        }
+
+        // New trip form
+        const tripForm = document.getElementById('newTripForm');
+        if (tripForm) {
+            tripForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.submitNewTrip();
+            });
+        }
+    }
+
+    showModal(modalId, data = {}) {
+        this.closeModal();
+        
+        const modal = document.getElementById(modalId);
+        if (!modal) return;
+
+        this.currentModal = modal;
+        modal.style.display = 'flex';
+        
+        // Populate form data if provided
+        if (data && Object.keys(data).length > 0) {
+            this.populateForm(modalId, data);
+        }
+        
+        // Add active class after display
+        setTimeout(() => {
+            modal.classList.add('active');
+        }, 10);
+        
+        // Focus first input
+        const firstInput = modal.querySelector('input, select, textarea');
+        if (firstInput) firstInput.focus();
+    }
+
+    closeModal() {
+        if (this.currentModal) {
+            this.currentModal.classList.remove('active');
+            setTimeout(() => {
+                this.currentModal.style.display = 'none';
+                this.currentModal = null;
+            }, 300);
+        }
+    }
+
+    populateForm(modalId, data) {
+        const modal = document.getElementById(modalId);
+        if (!modal) return;
+
+        Object.entries(data).forEach(([key, value]) => {
+            const input = modal.querySelector(`[name="${key}"], [id="${key}"]`);
+            if (input) {
+                if (input.type === 'checkbox') {
+                    input.checked = value;
+                } else {
+                    input.value = value;
+                }
+            }
+        });
+    }
+
+    // Modal-specific handlers
+    async saveAccountSettings() {
+        const fullName = document.getElementById('userFullName').value;
+        const email = document.getElementById('userEmail').value;
+        const phone = document.getElementById('userPhone').value;
+        const license = document.getElementById('userLicense').value;
+
+        this.app.showLoading();
+        
+        try {
+            if (window.db) {
+                const success = await window.db.updateDriverProfile(fullName, email, phone, license);
+                
+                if (success) {
+                    this.app.userData.name = fullName;
+                    this.app.updateUserUI();
+                    this.app.showToast('Account settings saved successfully!', 'success');
+                    this.closeModal();
+                } else {
+                    throw new Error('Failed to save settings');
+                }
+            } else {
+                // Mock success for demo
+                this.app.userData.name = fullName;
+                this.app.updateUserUI();
+                this.app.showToast('Account settings saved successfully!', 'success');
+                this.closeModal();
+            }
+        } catch (error) {
+            this.app.showToast('Failed to save settings: ' + error.message, 'error');
+        } finally {
+            this.app.hideLoading();
+        }
+    }
+
+    async updateSecuritySettings() {
+        const currentPassword = document.getElementById('currentPassword').value;
+        const newPassword = document.getElementById('newPassword').value;
+        const confirmPassword = document.getElementById('confirmPassword').value;
+
+        if (!currentPassword) {
+            this.app.showToast('Please enter current password', 'error');
+            return;
+        }
+
+        if (newPassword !== confirmPassword) {
+            this.app.showToast('New passwords do not match', 'error');
+            return;
+        }
+
+        if (newPassword.length < 6) {
+            this.app.showToast('Password must be at least 6 characters', 'error');
+            return;
+        }
+
+        this.app.showLoading();
+        
+        try {
+            // Simulate password change
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            
+            this.app.showToast('Password updated successfully!', 'success');
+            
+            // Clear form
+            document.getElementById('currentPassword').value = '';
+            document.getElementById('newPassword').value = '';
+            document.getElementById('confirmPassword').value = '';
+            
+            this.closeModal();
+        } catch (error) {
+            this.app.showToast('Failed to update password: ' + error.message, 'error');
+        } finally {
+            this.app.hideLoading();
+        }
+    }
+
+    async submitNewTrip() {
+        const vehicleId = document.getElementById('tripVehicle').value;
+        const startLocation = document.getElementById('tripStartLocation').value;
+        const startLat = document.getElementById('tripStartLat').value;
+        const startLon = document.getElementById('tripStartLon').value;
+        const purpose = document.getElementById('tripPurpose').value;
+
+        if (!vehicleId || !startLat || !startLon) {
+            this.app.showToast('Please fill all required fields', 'error');
+            return;
+        }
+
+        this.app.showLoading();
+        
+        try {
+            if (window.db) {
+                const result = await window.db.startTrip(vehicleId, parseFloat(startLat), parseFloat(startLon), startLocation);
+                
+                if (result) {
+                    this.app.liveData.trip_active = true;
+                    this.app.liveData.trip_id = result.trip_id;
+                    this.app.updateDashboardUI();
+                    this.app.setupTripControls();
+                    
+                    this.app.showToast('Trip started successfully!', 'success');
+                    this.closeModal();
+                } else {
+                    throw new Error('Failed to start trip');
+                }
+            } else {
+                // Mock success for demo
+                this.app.liveData.trip_active = true;
+                this.app.liveData.trip_id = Date.now();
+                this.app.updateDashboardUI();
+                this.app.setupTripControls();
+                
+                this.app.showToast('Trip started successfully!', 'success');
+                this.closeModal();
+            }
+        } catch (error) {
+            this.app.showToast('Failed to start trip: ' + error.message, 'error');
+        } finally {
+            this.app.hideLoading();
+        }
+    }
+
+    showAddVehicleModal() {
+        this.showModal('addVehicleModal');
+    }
+
+    showAddExpenseModal() {
+        this.showModal('addExpenseModal');
+    }
+
+    showAddFuelExpenseModal() {
+        this.showModal('addFuelExpenseModal');
+    }
+
+    showBudgetModal() {
+        this.showModal('budgetModal');
+    }
+
+    showAddDriverModal() {
+        this.showModal('addDriverModal');
+    }
+
+    showReportIncidentModal() {
+        this.showModal('reportIncidentModal');
+    }
+
+    showEmergencyModal() {
+        this.showModal('emergencyModal');
+    }
+
+    // Additional modal methods
+    async submitAddVehicle() {
+        const plate = document.getElementById('vehiclePlate').value;
+        const make = document.getElementById('vehicleMake').value;
+        const model = document.getElementById('vehicleModel').value;
+        const year = document.getElementById('vehicleYear').value;
+        const type = document.getElementById('vehicleType').value;
+        const vin = document.getElementById('vehicleVIN').value;
+
+        if (!plate || !make || !model || !year) {
+            this.app.showToast('Please fill all required fields', 'error');
+            return;
+        }
+
+        this.app.showLoading();
+        
+        try {
+            if (window.db) {
+                const vehicleId = await window.db.addVehicle(plate, make, model, parseInt(year), parseInt(type), vin);
+                
+                if (vehicleId) {
+                    this.app.showToast('Vehicle added successfully!', 'success');
+                    this.closeModal();
+                    
+                    // Refresh vehicles list if on vehicles page
+                    if (this.app.currentPage === 'vehicles') {
+                        this.app.loadVehicles();
+                    }
+                } else {
+                    throw new Error('License plate may already exist');
+                }
+            } else {
+                // Mock success for demo
+                this.app.showToast('Vehicle added successfully!', 'success');
+                this.closeModal();
+            }
+        } catch (error) {
+            this.app.showToast('Failed to add vehicle: ' + error.message, 'error');
+        } finally {
+            this.app.hideLoading();
+        }
+    }
+
+    async submitAddExpense() {
+        const vehicleId = document.getElementById('expenseVehicle').value;
+        const category = document.getElementById('expenseCategory').value;
+        const amount = document.getElementById('expenseAmount').value;
+        const description = document.getElementById('expenseDescription').value;
+        const date = document.getElementById('expenseDate').value;
+
+        if (!vehicleId || !category || !amount || !description) {
+            this.app.showToast('Please fill all required fields', 'error');
+            return;
+        }
+
+        this.app.showLoading();
+        
+        try {
+            if (window.db) {
+                const expenseId = await window.db.addExpense(
+                    vehicleId,
+                    parseInt(category),
+                    parseFloat(amount),
+                    description
+                );
+                
+                if (expenseId) {
+                    this.app.showToast('Expense added successfully!', 'success');
+                    this.closeModal();
+                    
+                    // Refresh expenses list if on expenses page
+                    if (this.app.currentPage === 'expenses') {
+                        this.app.loadExpenses();
+                    }
+                } else {
+                    throw new Error('Failed to add expense');
+                }
+            } else {
+                // Mock success for demo
+                this.app.showToast('Expense added successfully!', 'success');
+                this.closeModal();
+            }
+        } catch (error) {
+            this.app.showToast('Failed to add expense: ' + error.message, 'error');
+        } finally {
+            this.app.hideLoading();
+        }
+    }
+
+    async submitReportIncident() {
+        const vehicleId = document.getElementById('incidentVehicle').value;
+        const type = document.getElementById('incidentType').value;
+        const lat = document.getElementById('incidentLat').value;
+        const lon = document.getElementById('incidentLon').value;
+        const description = document.getElementById('incidentDescription').value;
+
+        if (!vehicleId || !type || !description) {
+            this.app.showToast('Please fill all required fields', 'error');
+            return;
+        }
+
+        this.app.showLoading();
+        
+        try {
+            if (window.db) {
+                const incidentId = await window.db.reportIncident(
+                    vehicleId,
+                    parseInt(type),
+                    parseFloat(lat || this.app.liveData.latitude),
+                    parseFloat(lon || this.app.liveData.longitude),
+                    description
+                );
+                
+                if (incidentId) {
+                    this.app.showToast('Incident reported successfully!', 'success');
+                    this.closeModal();
+                    
+                    // Refresh incidents list if on incidents page
+                    if (this.app.currentPage === 'incidents') {
+                        this.app.loadIncidents();
+                    }
+                } else {
+                    throw new Error('Failed to report incident');
+                }
+            } else {
+                // Mock success for demo
+                this.app.showToast('Incident reported successfully!', 'success');
+                this.closeModal();
+            }
+        } catch (error) {
+            this.app.showToast('Failed to report incident: ' + error.message, 'error');
+        } finally {
+            this.app.hideLoading();
+        }
+    }
+
+    // Helper methods
+    populateVehicleSelect(selectId, includeEmpty = true) {
+        const select = document.getElementById(selectId);
+        if (!select) return;
+
+        select.innerHTML = '';
+        
+        if (includeEmpty) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Select Vehicle';
+            select.appendChild(option);
+        }
+
+        // Mock vehicle options
+        const vehicles = [
+            { id: 1, text: 'Toyota Corolla (ABC-123)' },
+            { id: 2, text: 'Honda Civic (XYZ-789)' }
+        ];
+
+        vehicles.forEach(vehicle => {
+            const option = document.createElement('option');
+            option.value = vehicle.id;
+            option.textContent = vehicle.text;
+            select.appendChild(option);
+        });
+    }
+
+    populateCategorySelect(selectId, includeEmpty = true) {
+        const select = document.getElementById(selectId);
+        if (!select) return;
+
+        select.innerHTML = '';
+        
+        if (includeEmpty) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Select Category';
+            select.appendChild(option);
+        }
+
+        const categories = [
+            { id: 0, text: 'Fuel' },
+            { id: 1, text: 'Maintenance' },
+            { id: 2, text: 'Insurance' },
+            { id: 3, text: 'Toll' },
+            { id: 4, text: 'Parking' },
+            { id: 5, text: 'Other' }
+        ];
+
+        categories.forEach(category => {
+            const option = document.createElement('option');
+            option.value = category.id;
+            option.textContent = category.text;
+            select.appendChild(option);
+        });
+    }
+
+    populateIncidentTypeSelect(selectId, includeEmpty = true) {
+        const select = document.getElementById(selectId);
+        if (!select) return;
+
+        select.innerHTML = '';
+        
+        if (includeEmpty) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Select Incident Type';
+            select.appendChild(option);
+        }
+
+        const types = [
+            { id: 0, text: 'Accident' },
+            { id: 1, text: 'Breakdown' },
+            { id: 2, text: 'Theft' },
+            { id: 3, text: 'Vandalism' },
+            { id: 4, text: 'Traffic Violation' }
+        ];
+
+        types.forEach(type => {
+            const option = document.createElement('option');
+            option.value = type.id;
+            option.textContent = type.text;
+            select.appendChild(option);
+        });
+    }
+}
+
+// Initialize modal manager
+if (window.app) {
+    window.modals = new ModalManager(window.app);
+}

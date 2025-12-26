@@ -1,0 +1,308 @@
+<!-- login.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Drive Manager - Login</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        .login-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+
+        .login-card {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+
+        .login-logo {
+            margin-bottom: 30px;
+        }
+
+        .login-logo i {
+            font-size: 3rem;
+            color: #4361ee;
+            margin-bottom: 15px;
+        }
+
+        .login-logo h1 {
+            font-size: 2rem;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .login-logo p {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 12px 15px;
+            border: 1px solid #ddd;
+            border-radius: 10px;
+            font-family: 'Poppins', sans-serif;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #4361ee;
+            box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.1);
+        }
+
+        .btn-login {
+            width: 100%;
+            padding: 15px;
+            background: #4361ee;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-family: 'Poppins', sans-serif;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .btn-login:hover {
+            background: #3a56d4;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .login-footer {
+            margin-top: 30px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert-danger {
+            background: #fee;
+            border-left: 4px solid #f72585;
+            color: #c00;
+        }
+
+        .system-info {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+
+        .system-info h4 {
+            margin-bottom: 10px;
+            color: #4361ee;
+        }
+
+        .system-info ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .system-info li {
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .system-info i {
+            color: #4cc9f0;
+            width: 20px;
+        }
+
+        .loading {
+            display: none;
+        }
+
+        .loading.active {
+            display: inline-block;
+        }
+
+        .spinner-small {
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #4361ee;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-card">
+            <div class="login-logo">
+                <i class="fas fa-car"></i>
+                <h1>Smart Drive Manager</h1>
+                <p>Data Structures Project - BSCS-24063</p>
+            </div>
+
+            <div class="alert alert-danger" id="loginError"></div>
+
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="username">
+                        <i class="fas fa-user"></i> Username
+                    </label>
+                    <input type="text" id="username" class="form-control" 
+                           placeholder="Enter username" required
+                           value="admin">
+                </div>
+
+                <div class="form-group">
+                    <label for="password">
+                        <i class="fas fa-lock"></i> Password
+                    </label>
+                    <input type="password" id="password" class="form-control" 
+                           placeholder="Enter password" required
+                           value="admin123">
+                </div>
+
+                <button type="submit" class="btn-login" id="loginBtn">
+                    <span class="spinner-small" id="loginSpinner"></span>
+                    <span>Login to Dashboard</span>
+                </button>
+            </form>
+
+            <div class="login-footer">
+                <p>Smart Drive Management System</p>
+                <p>BSCS-24063 - Mubeen Butt</p>
+            </div>
+
+            <div class="system-info">
+                <h4><i class="fas fa-info-circle"></i> System Information</h4>
+                <ul>
+                    <li><i class="fas fa-server"></i> Backend: SDMServer (C++)</li>
+                    <li><i class="fas fa-database"></i> Database: Custom binary format</li>
+                    <li><i class="fas fa-video"></i> Camera: WebSocket streaming</li>
+                    <li><i class="fas fa-map-marker-alt"></i> GPS: Real-time tracking</li>
+                    <li><i class="fas fa-brain"></i> AI: Computer vision processing</li>
+                </ul>
+                <p><strong>Default Credentials:</strong></p>
+                <p>Username: <code>admin</code></p>
+                <p>Password: <code>admin123</code></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const loginForm = document.getElementById('loginForm');
+            const loginError = document.getElementById('loginError');
+            const loginBtn = document.getElementById('loginBtn');
+            const loginSpinner = document.getElementById('loginSpinner');
+
+            loginForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                
+                // Show loading
+                loginBtn.disabled = true;
+                loginSpinner.classList.add('active');
+                loginError.style.display = 'none';
+                
+                try {
+                    // For now, use mock login - replace with actual API call
+                    await mockLogin(username, password);
+                    
+                } catch (error) {
+                    loginError.textContent = error.message;
+                    loginError.style.display = 'block';
+                    loginBtn.disabled = false;
+                    loginSpinner.classList.remove('active');
+                }
+            });
+
+            async function mockLogin(username, password) {
+                // Simulate API delay
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // Mock validation
+                if (username === 'admin' && password === 'admin123') {
+                    // Store session data
+                    const userData = {
+                        driver_id: 1,
+                        name: 'Mubeen Butt',
+                        role: '1', // Admin
+                        username: username
+                    };
+                    
+                    localStorage.setItem('session_id', 'mock_session_' + Date.now());
+                    localStorage.setItem('user_data', JSON.stringify(userData));
+                    
+                    // Redirect to dashboard
+                    window.location.href = 'index.html';
+                } else {
+                    throw new Error('Invalid username or password');
+                }
+            }
+
+            // Auto-focus username field
+            document.getElementById('username').focus();
+            
+            // Enter key navigation
+            document.getElementById('username').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    document.getElementById('password').focus();
+                }
+            });
+            
+            document.getElementById('password').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loginForm.dispatchEvent(new Event('submit'));
+                }
+            });
+        });
+    </script>
+</body>
+</html>
