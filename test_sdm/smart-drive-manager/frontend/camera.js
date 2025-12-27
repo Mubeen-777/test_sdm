@@ -219,7 +219,11 @@ class CameraManager {
     }
 
     updateLaneVisualization(laneStatus, deviation) {
-        const centerLine = document.getElementById('laneCenterLine');
+        // Update lane center line in vision overlay
+        const centerLine = document.querySelector('.lane-center');
+        const leftBoundary = document.querySelector('.lane-left');
+        const rightBoundary = document.querySelector('.lane-right');
+        
         if (centerLine) {
             // Shift center line based on real deviation
             const offset = (deviation / 100) * 50; // Max 50% offset
@@ -227,29 +231,66 @@ class CameraManager {
             
             // Color based on status
             if (laneStatus === 'LEFT' || laneStatus === 'RIGHT') {
-                centerLine.style.backgroundColor = '#f8961e'; // Warning
+                centerLine.style.backgroundColor = 'rgba(248, 150, 30, 0.9)'; // Warning
             } else if (laneStatus === 'DEPARTURE') {
-                centerLine.style.backgroundColor = '#f72585'; // Danger
+                centerLine.style.backgroundColor = 'rgba(247, 37, 133, 0.9)'; // Danger
             } else {
-                centerLine.style.backgroundColor = '#4cc9f0'; // Normal
+                centerLine.style.backgroundColor = 'rgba(76, 201, 240, 0.9)'; // Normal
+            }
+        }
+
+        // Update lane status indicator
+        const laneStatusIndicator = document.getElementById('laneStatusIndicator');
+        if (laneStatusIndicator) {
+            const statusText = laneStatus === 'CENTERED' ? 'Centered' : 
+                              laneStatus === 'LEFT' ? 'Left' :
+                              laneStatus === 'RIGHT' ? 'Right' : 'Departure';
+            laneStatusIndicator.innerHTML = `<i class="fas fa-road"></i> Lane: ${statusText}`;
+            
+            // Update color based on status
+            if (laneStatus === 'LEFT' || laneStatus === 'RIGHT') {
+                laneStatusIndicator.style.background = 'rgba(248, 150, 30, 0.1)';
+                laneStatusIndicator.style.color = 'var(--warning-color)';
+            } else if (laneStatus === 'DEPARTURE') {
+                laneStatusIndicator.style.background = 'rgba(247, 37, 133, 0.1)';
+                laneStatusIndicator.style.color = 'var(--danger-color)';
+            } else {
+                laneStatusIndicator.style.background = 'rgba(76, 201, 240, 0.1)';
+                laneStatusIndicator.style.color = 'var(--success-color)';
+            }
+        }
+
+        // Update app's live data
+        if (this.app && this.app.liveData) {
+            this.app.liveData.lane_status = laneStatus;
+            if (this.app.updateDashboard) {
+                this.app.updateDashboard();
             }
         }
     }
 
     checkForWarnings(laneDeviation, driverAttention, drowsinessLevel) {
+        if (!this.app) return;
+        
         // Only alert on significant real events
         if (laneDeviation > 12) {
-            this.app.showAlert(`⚠️ High lane deviation: ${laneDeviation.toFixed(1)}%`, 'warning');
+            if (this.app.showToast) {
+                this.app.showToast(`⚠️ High lane deviation: ${laneDeviation.toFixed(1)}%`, 'warning');
+            }
             if (this.app.playAlertSound) this.app.playAlertSound();
         }
 
         if (driverAttention < 70) {
-            this.app.showAlert(`⚠️ Low driver attention: ${driverAttention.toFixed(0)}%`, 'warning');
+            if (this.app.showToast) {
+                this.app.showToast(`⚠️ Low driver attention: ${driverAttention.toFixed(0)}%`, 'warning');
+            }
             if (this.app.playAlertSound) this.app.playAlertSound();
         }
 
         if (drowsinessLevel > 8) {
-            this.app.showAlert(`🚨 High drowsiness detected: ${drowsinessLevel.toFixed(1)}%`, 'danger');
+            if (this.app.showToast) {
+                this.app.showToast(`🚨 High drowsiness detected: ${drowsinessLevel.toFixed(1)}%`, 'error');
+            }
             if (this.app.playAlertSound) this.app.playAlertSound();
         }
     }

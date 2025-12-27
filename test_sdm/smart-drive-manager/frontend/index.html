@@ -8,8 +8,7 @@
     <title>Smart Drive Manager - Dashboard</title>
     <link rel="stylesheet" href="style.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
-        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <script>
         // Authentication check - redirect to login if not authenticated
         (function() {
@@ -926,32 +925,26 @@
                     <div class="card-header">
                         <h3><i class="fas fa-video"></i> Live Camera Feed</h3>
                         <div class="card-actions">
-                            <button class="btn btn-primary btn-sm" onclick="toggleCamera()" id="cameraToggleBtn">
-                                <i class="fas fa-video"></i> Start Camera
-                            </button>
-                            <span class="status-badge" id="cameraStatusBadge">Off</span>
+                            <span class="status-badge success" id="cameraStatusBadge">
+                                <i class="fas fa-circle" style="font-size: 8px; animation: pulse-dot 2s infinite;"></i>
+                                Active
+                            </span>
                         </div>
                     </div>
                     <div class="card-body">
-                        <!-- In dashboardTemplate in index.html, ensure these IDs exist -->
+                        <!-- Camera feed container - always active after login -->
                         <div class="video-container">
-                            <div class="video-placeholder" id="noVideo">
-                                <i class="fas fa-video-slash"></i>
-                                <p>Camera feed will appear here</p>
-                                <p class="small">Start camera to see live stream</p>
+                            <div class="video-placeholder" id="noVideo" style="display: none;">
+                                <i class="fas fa-spinner fa-spin"></i>
+                                <p>Initializing camera...</p>
+                                <p class="small">Lane detection will start automatically</p>
                             </div>
-                            <img id="videoFeed" class="video-feed" style="display: none;">
+                            <img id="videoFeed" class="video-feed" style="display: block;">
                             <div class="video-overlay">
                                 <div class="fps-counter" id="fpsDisplay">FPS: 0</div>
                                 <div class="timestamp" id="frameTimestamp"></div>
                             </div>
                         </div>
-
-                        <!-- And the camera toggle button -->
-                        <button class="btn btn-primary btn-sm" onclick="toggleCamera()" id="cameraToggleBtn">
-                            <i class="fas fa-video"></i> Start Camera
-                        </button>
-                        <span class="status-badge" id="cameraStatusBadge">Off</span>
                     </div>
                 </div>
 
@@ -1614,48 +1607,45 @@
         <div id="cameraTemplate">
             <div class="page-header">
                 <h2><i class="fas fa-video"></i> Vision System</h2>
-                <p>Advanced driver assistance and monitoring</p>
+                <p>Advanced driver assistance and lane detection monitoring</p>
             </div>
 
             <div class="camera-controls">
-                <button class="btn btn-primary" onclick="toggleCamera()" id="visionCameraBtn">
-                    <i class="fas fa-video"></i> Start Camera
-                </button>
-                <button class="btn btn-success" onclick="startVisionProcessing()" id="visionProcessingBtn">
-                    <i class="fas fa-brain"></i> Start AI Processing
-                </button>
-                <button class="btn btn-warning" onclick="toggleNightVision()" id="nightVisionBtn">
-                    <i class="fas fa-moon"></i> Night Vision
-                </button>
                 <div class="status-indicators">
+                    <span class="status-badge success" id="visionStatusBadge">
+                        <i class="fas fa-circle" style="font-size: 8px; animation: pulse-dot 2s infinite;"></i>
+                        Camera Active
+                    </span>
                     <span class="status-indicator" id="laneStatusIndicator">
                         <i class="fas fa-road"></i> Lane: Centered
                     </span>
                     <span class="status-indicator" id="objectStatusIndicator">
-                        <i class="fas fa-eye"></i> Objects: Detected
+                        <i class="fas fa-eye"></i> Detection: Active
                     </span>
-                    <span class="status-indicator" id="faceStatusIndicator">
-                        <i class="fas fa-user"></i> Driver: Attentive
-                    </span>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-warning btn-sm" onclick="toggleNightVision()" id="nightVisionBtn">
+                        <i class="fas fa-moon"></i> Night Vision
+                    </button>
                 </div>
             </div>
 
             <div class="vision-grid">
                 <div class="card card-wide">
                     <div class="card-header">
-                        <h3>Live Vision Feed</h3>
+                        <h3><i class="fas fa-eye"></i> Live Lane Detection Feed</h3>
                         <div class="card-actions">
                             <span class="fps-display" id="visionFps">FPS: 0</span>
-                            <span class="resolution-display">720p</span>
+                            <span class="resolution-display">640x480</span>
                         </div>
                     </div>
                     <div class="card-body">
                         <div class="vision-container">
-                            <div class="vision-placeholder" id="visionPlaceholder">
-                                <i class="fas fa-video-slash"></i>
-                                <p>Vision feed will appear here</p>
+                            <div class="vision-placeholder" id="visionPlaceholder" style="display: none;">
+                                <i class="fas fa-spinner fa-spin"></i>
+                                <p>Initializing vision system...</p>
                             </div>
-                            <img id="visionFeed" class="vision-feed" style="display: none;">
+                            <img id="visionFeed" class="vision-feed" style="display: block;">
                             <div class="vision-overlay">
                                 <div class="detection-box" id="laneDetection">
                                     <div class="lane-center"></div>

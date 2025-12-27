@@ -164,12 +164,18 @@ public:
         broadcast_message(video_msg.dump());
     }
 
-    // Update camera_loop function to send frames:
+    // Update camera_loop function to send frames with warning cooldown only:
     void camera_loop()
     {
         cv::Mat frame;
         int frame_count = 0;
-        auto last_frame_time = chrono::steady_clock::now();
+        int processed_frames = 0;
+        auto last_fps_time = chrono::steady_clock::now();
+        auto last_warning_time = chrono::steady_clock::now();
+        double current_fps = 0;
+        
+        // Only limit warning messages to prevent flooding (not frame rate)
+        const auto WARNING_COOLDOWN = chrono::milliseconds(500);  // Minimum time between warnings
 
         while (camera_running.load())
         {
@@ -178,11 +184,23 @@ public:
                 if (camera && camera->grabFrame(frame) && !frame.empty())
                 {
                     frame_count++;
+                    
+                    // Calculate FPS every second
+                    auto now = chrono::steady_clock::now();
+                    auto fps_elapsed = chrono::duration_cast<chrono::milliseconds>(now - last_fps_time).count();
+                    if (fps_elapsed >= 1000)
+                    {
+                        current_fps = processed_frames * 1000.0 / fps_elapsed;
+                        processed_frames = 0;
+                        last_fps_time = now;
+                    }
+                    
+                    processed_frames++;
 
-                    // Process lane detection
-                    process_frame(frame, 0);
+                    // Process lane detection (with rate-limited warnings only)
+                    process_frame_rate_limited(frame, current_fps, last_warning_time, WARNING_COOLDOWN);
 
-                    // Encode frame as JPEG
+                    // Encode frame as JPEG with original quality
                     vector<uchar> buffer;
                     cv::imencode(".jpg", frame, buffer, {cv::IMWRITE_JPEG_QUALITY, 70});
 
@@ -195,13 +213,87 @@ public:
                         send_video_frame(base64_frame);
                     }
                 }
+                else
+                {
+                    // No frame available, small sleep to prevent busy waiting
+                    this_thread::sleep_for(chrono::milliseconds(5));
+                }
             }
             catch (const exception &e)
             {
                 cerr << "Camera loop error: " << e.what() << endl;
-                this_thread::sleep_for(chrono::seconds(1));
+                this_thread::sleep_for(chrono::milliseconds(100));
             }
         }
+    }
+    
+    // Rate-limited frame processing to prevent message flooding
+    void process_frame_rate_limited(cv::Mat &frame, double fps, 
+                                    chrono::steady_clock::time_point &last_warning_time,
+                                    const chrono::milliseconds &warning_cooldown)
+    {
+        // Add FPS display
+        cv::putText(frame, "FPS: " + to_string((int)fps),
+                    cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7,
+                    cv::Scalar(0, 255, 0), 2);
+
+        // Process lane detection if available
+        if (lane_detector)
+        {
+            try
+            {
+                auto result = lane_detector->detectLanes(frame);
+
+                // Draw lanes
+                lane_detector->drawLanes(frame, result, true);
+
+                // Check for lane departure
+                string direction;
+                double deviation;
+                bool departure = lane_detector->checkLaneDeparture(result, frame, direction, deviation);
+
+                if (departure)
+                {
+                    live_data.lane_departures++;
+                    live_data.set_lane_status(direction);
+                    lane_detector->drawDepartureWarning(frame, direction, deviation, true);
+
+                    // Rate limit warning broadcasts to prevent message flooding
+                    auto now = chrono::steady_clock::now();
+                    if (chrono::duration_cast<chrono::milliseconds>(now - last_warning_time) >= warning_cooldown)
+                    {
+                        last_warning_time = now;
+                        
+                        // Send warning with rate limiting
+                        json data_obj = json::object();
+                        data_obj["direction"] = direction;
+                        data_obj["deviation"] = deviation;
+                        data_obj["count"] = live_data.lane_departures.load();
+                        data_obj["timestamp"] = time(nullptr);
+
+                        json warning = json::object();
+                        warning["type"] = "lane_warning";
+                        warning["data"] = data_obj;
+
+                        broadcast_message(warning.dump());
+                    }
+                }
+                else
+                {
+                    live_data.set_lane_status("CENTERED");
+                }
+            }
+            catch (const exception &e)
+            {
+                cerr << "Lane detection error: " << e.what() << endl;
+            }
+        }
+
+        // Display trip status
+        string status_text = live_data.trip_active.load() ? "TRIP ACTIVE" : "TRIP INACTIVE";
+        cv::Scalar status_color = live_data.trip_active.load() ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
+        cv::putText(frame, status_text, cv::Point(10, 60),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2);
     }
     SmartDriveBridge() : running(false), camera_running(false), db_manager(nullptr)
     {
@@ -799,64 +891,6 @@ private:
         send_message(hdl, response.dump());
     }
 
-    void process_frame(cv::Mat &frame, double fps)
-    {
-        // Add FPS display
-        cv::putText(frame, "FPS: " + to_string((int)fps),
-                    cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.7,
-                    cv::Scalar(0, 255, 0), 2);
-
-        // Process lane detection if available
-        if (lane_detector)
-        {
-            try
-            {
-                auto result = lane_detector->detectLanes(frame);
-
-                // Draw lanes
-                lane_detector->drawLanes(frame, result, true);
-
-                // Check for lane departure
-                string direction;
-                double deviation;
-                bool departure = lane_detector->checkLaneDeparture(result, frame, direction, deviation);
-
-                if (departure)
-                {
-                    live_data.lane_departures++;
-                    live_data.set_lane_status(direction); // Use setter for thread-safe access
-                    lane_detector->drawDepartureWarning(frame, direction, deviation, true);
-
-                    // Fixed JSON construction for warning
-                    json data_obj = json::object();
-                    data_obj["direction"] = direction;
-                    data_obj["deviation"] = deviation;
-                    data_obj["count"] = live_data.lane_departures.load();
-                    data_obj["timestamp"] = time(nullptr);
-
-                    json warning = json::object();
-                    warning["type"] = "lane_warning";
-                    warning["data"] = data_obj;
-
-                    broadcast_message(warning.dump());
-                }
-                else
-                {
-                    live_data.set_lane_status("CENTERED");
-                }
-            }
-            catch (const exception &e)
-            {
-                cerr << "Lane detection error: " << e.what() << endl;
-            }
-        }
-
-        // Display trip status
-        string status_text = live_data.trip_active.load() ? "TRIP ACTIVE" : "TRIP INACTIVE";
-        cv::Scalar status_color = live_data.trip_active.load() ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255);
-        cv::putText(frame, status_text, cv::Point(10, 60),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2);
-    }
 
     void update_location(const LocationData &loc)
     {

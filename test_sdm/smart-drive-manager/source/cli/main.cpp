@@ -5,6 +5,8 @@
 #include <iostream>
 #include <csignal>
 #include <cstdlib>
+#include <fstream>
+#include <vector>
 
 using namespace std;
 
@@ -27,7 +29,8 @@ void signal_handler(int signal)
 
 int main(int argc, char *argv[])
 {
-    string config_file = "../../config/default.sdmconf";
+    // Default config file path - try multiple locations
+    string config_file = "../../include/sdm.conf";  // Primary location
     bool server_mode = true;
 
     for (int i = 1; i < argc; i++)
@@ -59,20 +62,61 @@ int main(int argc, char *argv[])
     SDMConfig config;
     cout << "Loading config from: " << config_file << endl;
 
-    if (!config.load_from_file(config_file))
-    {
-        cout << "Warning: Could not load config file '" << config_file << "'" << endl;
-        cout << "Using default configuration..." << endl;
+    // Try multiple config file locations (relative and absolute)
+    string project_root = "";
+    // Try to find project root by looking for include/sdm.conf
+    ifstream test_file("../../include/sdm.conf");
+    if (test_file.good()) {
+        project_root = "../../";
+        test_file.close();
+    } else {
+        test_file.open("../include/sdm.conf");
+        if (test_file.good()) {
+            project_root = "../";
+            test_file.close();
+        }
     }
-    else
+    
+    vector<string> config_paths = {
+        config_file,  // User-specified or default
+        project_root + "include/sdm.conf",  // Primary location
+        "../../include/sdm.conf",  // Fallback
+        "../include/sdm.conf",    // Alternative location
+        "include/sdm.conf",       // If running from root
+        "../../config/default.sdmconf",  // Legacy location
+        "../config/default.sdmconf"     // Legacy alternative
+    };
+
+    bool config_loaded = false;
+    for (const auto& path : config_paths)
     {
-        cout << "Config loaded successfully!" << endl;
+        if (config.load_from_file(path))
+        {
+            cout << "✓ Config loaded successfully from: " << path << endl;
+            config_loaded = true;
+            break;
+        }
     }
 
+    if (!config_loaded)
+    {
+        cout << "⚠ Warning: Could not load config file from any location" << endl;
+        cout << "  Tried: " << config_file << endl;
+        for (size_t i = 1; i < config_paths.size(); i++)
+        {
+            cout << "  Tried: " << config_paths[i] << endl;
+        }
+        cout << "  Using default configuration..." << endl;
+    }
+
+    cout << "\n=== Configuration ===" << endl;
     cout << "Database path: " << config.database_path << endl;
     cout << "Index path: " << config.index_path << endl;
     cout << "Port: " << config.port << endl;
-    cout << endl;
+    cout << "Worker Threads: " << config.worker_threads << " (from config file)" << endl;
+    cout << "Max Connections: " << config.max_connections << endl;
+    cout << "Queue Capacity: " << config.queue_capacity << endl;
+    cout << "========================\n" << endl;
 
     if (server_mode)
     {

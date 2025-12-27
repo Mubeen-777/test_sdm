@@ -7,10 +7,12 @@ class SmartDriveWebApp {
         this.ws = null;
         this.isConnected = false;
         this.isCameraActive = false;
+        this.cameraWasStopped = false;
         this.isTripActive = false;
         this.currentPage = 'dashboard';
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
+        this.dashboardRefreshInterval = null;
 
         // Real-time data from WebSocket
         this.liveData = {
@@ -49,8 +51,21 @@ class SmartDriveWebApp {
         
         // Initialize GPS Manager
         if (typeof GPSManager !== 'undefined') {
-            this.gpsManager = new GPSManager(this);
-            this.gpsManager.startTracking();
+            try {
+                this.gpsManager = new GPSManager(this);
+                window.gpsManager = this.gpsManager; // Make globally accessible
+                const gpsStarted = this.gpsManager.startTracking();
+                if (gpsStarted) {
+                    console.log('✅ GPS Manager initialized and started');
+                } else {
+                    console.warn('⚠️ GPS Manager initialized but failed to start tracking');
+                }
+            } catch (error) {
+                console.error('❌ Failed to initialize GPS Manager:', error);
+                this.showToast('Failed to initialize GPS: ' + error.message, 'error');
+            }
+        } else {
+            console.warn('⚠️ GPSManager class not found. GPS tracking will not work.');
         }
         
         this.loadPage('dashboard');
@@ -73,9 +88,37 @@ class SmartDriveWebApp {
 
         // Check backend connection
         this.checkBackendConnection();
+        
+        // Auto-start camera after login (camera runs permanently)
+        this.autoStartCamera();
 
         console.log('✅ App initialized');
         console.log('✅ window.app set:', window.app === this);
+    }
+    
+    // Auto-start camera - runs permanently after login
+    autoStartCamera() {
+        // Wait for WebSocket to connect, then start camera
+        const startCameraWhenReady = () => {
+            if (this.isConnected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+                console.log('📹 Auto-starting camera...');
+                this.ws.send(JSON.stringify({
+                    command: 'toggle_camera',
+                    enable: true
+                }));
+                this.isCameraActive = true;
+                this.cameraWasStopped = false;
+                this.updateCameraStatus(true);
+                this.prepareVideoFeeds();
+                this.showToast('Camera started automatically', 'success');
+            } else {
+                // Retry in 500ms if not connected yet
+                setTimeout(startCameraWhenReady, 500);
+            }
+        };
+        
+        // Start checking after a brief delay to allow WebSocket connection
+        setTimeout(startCameraWhenReady, 1000);
     }
 
     async checkBackendConnection() {
@@ -115,8 +158,25 @@ class SmartDriveWebApp {
                 this.updateConnectionStatus(true);
                 this.showToast('Connected to backend system', 'success');
 
+                // Always restart camera on reconnection (camera runs permanently)
+                setTimeout(() => {
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        this.ws.send(JSON.stringify({
+                            command: 'toggle_camera',
+                            enable: true
+                        }));
+                        this.isCameraActive = true;
+                        this.updateCameraStatus(true);
+                        this.prepareVideoFeeds();
+                        console.log('📹 Camera started/restarted after WebSocket connection');
+                    }
+                }, 500);
+
                 // Keep-alive ping
-                setInterval(() => {
+                if (this.keepAliveInterval) {
+                    clearInterval(this.keepAliveInterval);
+                }
+                this.keepAliveInterval = setInterval(() => {
                     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                         this.ws.send(JSON.stringify({ command: 'ping' }));
                     }
@@ -167,6 +227,13 @@ class SmartDriveWebApp {
                 }
                 break;
 
+            case 'detection_data':
+                // Handle lane detection and vision data
+                if (window.cameraManager && data.data) {
+                    window.cameraManager.updateFromWebSocket(data.data);
+                }
+                break;
+
             case 'lane_warning':
                 this.showToast(`⚠️ LANE DEPARTURE: ${data.data.direction}`, 'warning');
                 this.playAlertSound();
@@ -204,15 +271,40 @@ class SmartDriveWebApp {
                 break;
 
             case 'camera_status':
+                const wasActive = this.isCameraActive;
                 this.isCameraActive = data.data.enabled;
                 this.updateCameraStatus(data.data.enabled);
+                
+                // If camera just became active, ensure video feeds are ready
+                if (!wasActive && data.data.enabled) {
+                    this.prepareVideoFeeds();
+                }
+                break;
+            
+            case 'camera_reset':
+                // Camera was reset, ready for new stream
+                console.log('Camera reset acknowledged');
+                this.cameraWasStopped = false;
                 break;
         }
     }
 
     updateLiveData(data) {
-        if (data.speed !== undefined) this.liveData.speed = data.speed;
-        if (data.acceleration !== undefined) this.liveData.acceleration = data.acceleration;
+        if (!data) {
+            console.warn('⚠️ updateLiveData called with null/undefined data');
+            return;
+        }
+
+        let dataChanged = false;
+
+        if (data.speed !== undefined && !isNaN(data.speed)) {
+            this.liveData.speed = Math.max(0, data.speed);
+            dataChanged = true;
+        }
+        if (data.acceleration !== undefined && !isNaN(data.acceleration)) {
+            this.liveData.acceleration = data.acceleration;
+            dataChanged = true;
+        }
         if (data.safety_score !== undefined) this.liveData.safety_score = data.safety_score;
         if (data.lane_status !== undefined) this.liveData.lane_status = data.lane_status;
         if (data.rapid_accel_count !== undefined) this.liveData.rapid_accel_count = data.rapid_accel_count;
@@ -220,32 +312,60 @@ class SmartDriveWebApp {
         if (data.lane_departures !== undefined) this.liveData.lane_departures = data.lane_departures;
         if (data.trip_active !== undefined) this.liveData.trip_active = data.trip_active;
         if (data.trip_id !== undefined) this.liveData.trip_id = data.trip_id;
-        if (data.latitude !== undefined) this.liveData.latitude = data.latitude;
-        if (data.longitude !== undefined) this.liveData.longitude = data.longitude;
-        this.updateDashboard();
+        if (data.latitude !== undefined && !isNaN(data.latitude)) {
+            this.liveData.latitude = data.latitude;
+            dataChanged = true;
+        }
+        if (data.longitude !== undefined && !isNaN(data.longitude)) {
+            this.liveData.longitude = data.longitude;
+            dataChanged = true;
+        }
+        
+        // Update GPS if available
+        if (this.gpsManager && data.latitude && data.longitude) {
+            this.gpsManager.lastPosition = { lat: data.latitude, lon: data.longitude };
+        }
+        
+        // Only update dashboard if data actually changed (to avoid unnecessary redraws)
+        if (dataChanged) {
+            this.updateDashboard();
+        }
     }
 
     updateLocationUI(lat, lon, accuracy) {
-        // Optional: Update accuracy indicator if you have one
-        // For now, updateLiveData handles the main display
-        // We could also update a map marker here if we had a map
+        // Update location data immediately
         this.liveData.latitude = lat;
         this.liveData.longitude = lon;
-        // Don't trigger full dashboard update here to avoid double render with updateLiveData
-        // unless updateLiveData is not called immediately
+        
+        // Update GPS display elements directly for immediate feedback
+        const gpsLat = document.getElementById('gpsLat');
+        const gpsLon = document.getElementById('gpsLon');
+        if (gpsLat) gpsLat.textContent = lat.toFixed(6) + '°';
+        if (gpsLon) gpsLon.textContent = lon.toFixed(6) + '°';
+        
+        // Note: updateLiveData will also update these, but this ensures immediate UI feedback
     }
 
     // In app.js, replace the displayVideoFrame function:
 
     displayVideoFrame(base64Data, timestamp) {
+        // Only display if camera is active
+        if (!this.isCameraActive) {
+            return;
+        }
+
         // For dashboard
         const videoFeed = document.getElementById('videoFeed');
         const noVideo = document.getElementById('noVideo');
 
         if (videoFeed && noVideo) {
-            videoFeed.src = 'data:image/jpeg;base64,' + base64Data;
-            videoFeed.style.display = 'block';
-            noVideo.style.display = 'none';
+            try {
+                videoFeed.src = 'data:image/jpeg;base64,' + base64Data;
+                videoFeed.style.display = 'block';
+                noVideo.style.display = 'none';
+            } catch (error) {
+                console.error('Error displaying video frame:', error);
+            }
         }
 
         // For vision page (camera template)
@@ -253,9 +373,13 @@ class SmartDriveWebApp {
         const visionPlaceholder = document.getElementById('visionPlaceholder');
 
         if (visionFeed && visionPlaceholder) {
-            visionFeed.src = 'data:image/jpeg;base64,' + base64Data;
-            visionFeed.style.display = 'block';
-            visionPlaceholder.style.display = 'none';
+            try {
+                visionFeed.src = 'data:image/jpeg;base64,' + base64Data;
+                visionFeed.style.display = 'block';
+                visionPlaceholder.style.display = 'none';
+            } catch (error) {
+                console.error('Error displaying vision frame:', error);
+            }
         }
 
         // Update FPS
@@ -335,7 +459,7 @@ class SmartDriveWebApp {
     }
 
     toggleCamera() {
-        console.log('Toggle camera clicked');
+        console.log('Toggle camera clicked, current state:', this.isCameraActive);
         
         if (!this.isConnected && !this.ws) {
             this.showToast('Not connected to WebSocket! Trying to connect...', 'warning');
@@ -351,14 +475,108 @@ class SmartDriveWebApp {
         }
 
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({
-                command: 'toggle_camera',
-                enable: !this.isCameraActive
-            }));
-            this.showToast(this.isCameraActive ? 'Stopping camera...' : 'Starting camera...', 'info');
+            const newState = !this.isCameraActive;
+            
+            // If starting camera after it was stopped, send a reset command first
+            if (newState && this.cameraWasStopped) {
+                this.ws.send(JSON.stringify({
+                    command: 'reset_camera'
+                }));
+                // Small delay before starting
+                setTimeout(() => {
+                    this.ws.send(JSON.stringify({
+                        command: 'toggle_camera',
+                        enable: true
+                    }));
+                }, 100);
+            } else {
+                this.ws.send(JSON.stringify({
+                    command: 'toggle_camera',
+                    enable: newState
+                }));
+            }
+            
+            // Track if camera was stopped for restart handling
+            if (!newState) {
+                this.cameraWasStopped = true;
+            } else {
+                this.cameraWasStopped = false;
+            }
+            
+            // Reset video feed elements when stopping
+            if (!newState) {
+                this.resetVideoFeeds();
+            }
+            
+            // Optimistically update UI immediately
+            this.isCameraActive = newState;
+            this.updateCameraStatus(newState);
+            
+            this.showToast(newState ? 'Starting camera...' : 'Stopping camera...', 'info');
         } else {
             this.showToast('WebSocket not connected. Please wait...', 'warning');
         }
+    }
+
+    resetVideoFeeds() {
+        // Reset dashboard video feed
+        const videoFeed = document.getElementById('videoFeed');
+        const noVideo = document.getElementById('noVideo');
+        if (videoFeed) {
+            videoFeed.src = '';
+            videoFeed.style.display = 'none';
+        }
+        if (noVideo) {
+            noVideo.style.display = 'flex';
+        }
+        
+        // Reset vision page feed
+        const visionFeed = document.getElementById('visionFeed');
+        const visionPlaceholder = document.getElementById('visionPlaceholder');
+        if (visionFeed) {
+            visionFeed.src = '';
+            visionFeed.style.display = 'none';
+        }
+        if (visionPlaceholder) {
+            visionPlaceholder.style.display = 'flex';
+        }
+        
+        // Reset FPS counters
+        this.frameCount = 0;
+        this.fpsCounter = 0;
+        const fpsDisplay = document.getElementById('fpsDisplay');
+        const visionFps = document.getElementById('visionFps');
+        if (fpsDisplay) fpsDisplay.textContent = 'FPS: 0';
+        if (visionFps) visionFps.textContent = 'FPS: 0';
+    }
+
+    prepareVideoFeeds() {
+        // Prepare dashboard video feed for receiving frames
+        const videoFeed = document.getElementById('videoFeed');
+        const noVideo = document.getElementById('noVideo');
+        if (videoFeed) {
+            videoFeed.src = '';
+            videoFeed.style.display = 'block';
+        }
+        if (noVideo) {
+            noVideo.style.display = 'none';
+        }
+        
+        // Prepare vision page feed
+        const visionFeed = document.getElementById('visionFeed');
+        const visionPlaceholder = document.getElementById('visionPlaceholder');
+        if (visionFeed) {
+            visionFeed.src = '';
+            visionFeed.style.display = 'block';
+        }
+        if (visionPlaceholder) {
+            visionPlaceholder.style.display = 'none';
+        }
+        
+        // Reset FPS counter for new stream
+        this.frameCount = 0;
+        this.fpsCounter = 0;
+        this.lastFpsUpdate = Date.now();
     }
 
     // UI UPDATE FUNCTIONS
@@ -406,9 +624,23 @@ class SmartDriveWebApp {
 
     drawSpeedometer(speed) {
         const canvas = document.getElementById('speedometer');
-        if (!canvas) return;
+        if (!canvas) {
+            console.warn('⚠️ Speedometer canvas not found');
+            return;
+        }
+
+        // Ensure speed is a valid number
+        if (typeof speed !== 'number' || isNaN(speed)) {
+            speed = 0;
+        }
+        speed = Math.max(0, Math.min(speed, 300)); // Clamp between 0 and 300 km/h
 
         const ctx = canvas.getContext('2d');
+        if (!ctx) {
+            console.error('❌ Failed to get canvas context');
+            return;
+        }
+
         const centerX = canvas.width / 2;
         const centerY = canvas.height / 2;
         const radius = 100;
@@ -485,46 +717,68 @@ class SmartDriveWebApp {
         }
     }
 
-    // In app.js, update the updateCameraStatus function:
-
+    // Update camera status display (camera runs permanently - no toggle)
     updateCameraStatus(enabled) {
         this.isCameraActive = enabled;
 
-        // Update dashboard camera button
-        const cameraToggleBtn = document.getElementById('cameraToggleBtn');
+        // Update dashboard camera status badge
         const cameraStatusBadge = document.getElementById('cameraStatusBadge');
 
-        if (cameraToggleBtn && cameraStatusBadge) {
+        if (cameraStatusBadge) {
             if (enabled) {
-                cameraToggleBtn.innerHTML = '<i class="fas fa-video-slash"></i> Stop Camera';
-                cameraToggleBtn.className = 'btn btn-danger btn-sm';
-                cameraStatusBadge.textContent = 'Active';
+                cameraStatusBadge.innerHTML = '<i class="fas fa-circle" style="font-size: 8px; animation: pulse-dot 2s infinite;"></i> Active';
                 cameraStatusBadge.className = 'status-badge success';
+                
+                // Show video feed when camera is enabled
+                const videoFeed = document.getElementById('videoFeed');
+                const noVideo = document.getElementById('noVideo');
+                if (videoFeed && noVideo) {
+                    videoFeed.src = '';
+                    videoFeed.style.display = 'block';
+                    noVideo.style.display = 'none';
+                }
             } else {
-                cameraToggleBtn.innerHTML = '<i class="fas fa-video"></i> Start Camera';
-                cameraToggleBtn.className = 'btn btn-primary btn-sm';
-                cameraStatusBadge.textContent = 'Off';
-                cameraStatusBadge.className = 'status-badge';
+                cameraStatusBadge.innerHTML = '<i class="fas fa-circle" style="font-size: 8px;"></i> Reconnecting...';
+                cameraStatusBadge.className = 'status-badge warning';
 
-                // Hide video feed
+                // Show loading placeholder
                 const videoFeed = document.getElementById('videoFeed');
                 const noVideo = document.getElementById('noVideo');
                 if (videoFeed && noVideo) {
                     videoFeed.style.display = 'none';
-                    noVideo.style.display = 'block';
+                    noVideo.style.display = 'flex';
+                    noVideo.innerHTML = `
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <p>Reconnecting camera...</p>
+                        <p class="small">Please wait</p>
+                    `;
                 }
             }
         }
 
-        // Update vision page camera button
-        const visionCameraBtn = document.getElementById('visionCameraBtn');
-        if (visionCameraBtn) {
+        // Update vision page feed (also runs permanently)
+        const visionFeed = document.getElementById('visionFeed');
+        const visionPlaceholder = document.getElementById('visionPlaceholder');
+        const visionStatusBadge = document.getElementById('visionStatusBadge');
+        
+        if (visionStatusBadge) {
             if (enabled) {
-                visionCameraBtn.innerHTML = '<i class="fas fa-video-slash"></i> Stop Camera';
-                visionCameraBtn.className = 'btn btn-danger';
+                visionStatusBadge.innerHTML = '<i class="fas fa-circle" style="font-size: 8px; animation: pulse-dot 2s infinite;"></i> Active';
+                visionStatusBadge.className = 'status-badge success';
             } else {
-                visionCameraBtn.innerHTML = '<i class="fas fa-video"></i> Start Camera';
-                visionCameraBtn.className = 'btn btn-primary';
+                visionStatusBadge.innerHTML = '<i class="fas fa-circle" style="font-size: 8px;"></i> Reconnecting...';
+                visionStatusBadge.className = 'status-badge warning';
+            }
+        }
+        
+        if (visionFeed && visionPlaceholder) {
+            if (enabled) {
+                visionFeed.src = '';
+                visionFeed.style.display = 'block';
+                visionPlaceholder.style.display = 'none';
+            } else {
+                visionFeed.style.display = 'none';
+                visionPlaceholder.style.display = 'flex';
             }
         }
     }
@@ -563,6 +817,7 @@ class SmartDriveWebApp {
         const titles = {
             dashboard: 'Dashboard',
             lane_detection: 'Lane Detection System',
+            camera: 'Vision System',
             trips: 'Trip Management',
             vehicles: 'Vehicle Management',
             expenses: 'Expense Tracking',
@@ -580,6 +835,7 @@ class SmartDriveWebApp {
             const subtitles = {
                 dashboard: 'Real-time monitoring and GPS tracking',
                 lane_detection: 'Computer vision and lane departure warnings',
+                camera: 'Computer vision and lane departure warnings',
                 trips: 'View and manage your driving trips',
                 vehicles: 'Manage your vehicles and maintenance',
                 expenses: 'Track and manage vehicle expenses',
@@ -592,7 +848,9 @@ class SmartDriveWebApp {
         }
 
         // Load page content
-        const template = document.getElementById(pageName + 'Template');
+        // Handle special case for camera page
+        const templateId = pageName === 'camera' ? 'cameraTemplate' : pageName + 'Template';
+        const template = document.getElementById(templateId);
         const contentArea = document.getElementById('contentArea');
 
         if (template && contentArea) {
@@ -600,6 +858,11 @@ class SmartDriveWebApp {
             this.initPageComponents(pageName);
             // Re-attach event listeners after content is loaded
             this.attachPageListeners();
+        } else {
+            console.warn(`Template not found: ${templateId}`);
+            if (contentArea) {
+                contentArea.innerHTML = `<div class="empty-state"><h3>Page not found</h3><p>Template for "${pageName}" is missing.</p></div>`;
+            }
         }
     }
 
@@ -629,6 +892,34 @@ class SmartDriveWebApp {
             case 'camera':
                 this.initLaneDetection();
                 break;
+        }
+    }
+
+    initLaneDetection() {
+        // Initialize camera manager for vision system
+        if (typeof CameraManager !== 'undefined' && !window.cameraManager) {
+            window.cameraManager = new CameraManager(this);
+            window.cameraManager.initVisionSystem();
+        }
+        
+        // Update camera status if already active
+        if (this.isCameraActive) {
+            const visionFeed = document.getElementById('visionFeed');
+            const visionPlaceholder = document.getElementById('visionPlaceholder');
+            if (visionFeed && visionPlaceholder) {
+                visionFeed.style.display = 'block';
+                visionPlaceholder.style.display = 'none';
+            }
+        }
+
+        // Setup night vision toggle
+        const nightModeToggle = document.getElementById('nightModeToggle');
+        if (nightModeToggle) {
+            nightModeToggle.addEventListener('change', () => {
+                if (window.cameraManager) {
+                    window.cameraManager.toggleNightVision();
+                }
+            });
         }
     }
 
@@ -1147,13 +1438,10 @@ class SmartDriveWebApp {
     }
 
     initDashboard() {
-        // Initialize speedometer
-        this.drawSpeedometer(0);
-
-        // Check if we have live data already
-        if (this.liveData.speed > 0) {
-            this.drawSpeedometer(this.liveData.speed);
-        }
+        // Initialize speedometer with current speed (or 0)
+        const initialSpeed = this.liveData.speed || 0;
+        this.drawSpeedometer(initialSpeed);
+        console.log('📊 Speedometer initialized with speed:', initialSpeed, 'km/h');
 
         this.updateDashboard();
         this.updateTripControls();
@@ -1163,6 +1451,33 @@ class SmartDriveWebApp {
 
         // Load dashboard statistics
         this.loadDashboardStats();
+
+        // Check GPS status
+        if (!this.gpsManager) {
+            console.warn('⚠️ GPS Manager not initialized');
+            this.showToast('GPS not available. Speed and location tracking may be limited.', 'warning');
+        } else if (!navigator.geolocation) {
+            console.warn('⚠️ Browser does not support geolocation');
+            this.showToast('Your browser does not support GPS tracking', 'warning');
+        } else {
+            // Ensure GPS is tracking
+            if (!this.gpsManager.watchId && !this.gpsManager.pollInterval) {
+                console.log('🔄 Restarting GPS tracking...');
+                this.gpsManager.startTracking();
+            }
+        }
+        
+        // Set up periodic dashboard refresh to ensure UI stays updated
+        // This helps when GPS updates are slow
+        if (this.dashboardRefreshInterval) {
+            clearInterval(this.dashboardRefreshInterval);
+        }
+        this.dashboardRefreshInterval = setInterval(() => {
+            // Refresh dashboard every 500ms to ensure smooth updates
+            if (this.currentPage === 'dashboard') {
+                this.updateDashboard();
+            }
+        }, 500);
     }
 
     async loadDashboardStats() {
@@ -1207,13 +1522,6 @@ class SmartDriveWebApp {
         }
     }
 
-    initLaneDetection() {
-        // Lane detection page initialized
-        if (this.isCameraActive) {
-            const noVideo = document.getElementById('laneNoVideo');
-            if (noVideo) noVideo.style.display = 'none';
-        }
-    }
 
     // EVENT LISTENERS
     setupEventListeners() {
@@ -1265,6 +1573,12 @@ class SmartDriveWebApp {
         if (toggleCameraBtn) {
             toggleCameraBtn.onclick = () => this.toggleCamera();
         }
+
+        // Camera toggle buttons (multiple instances)
+        const cameraToggleBtns = document.querySelectorAll('#cameraToggleBtn, #visionCameraBtn');
+        cameraToggleBtns.forEach(btn => {
+            btn.onclick = () => this.toggleCamera();
+        });
     }
 
     updateUserUI() {
@@ -1347,6 +1661,29 @@ class SmartDriveWebApp {
         const spinner = document.getElementById('loadingSpinner');
         if (spinner) {
             spinner.style.display = 'none';
+        }
+    }
+
+    showModal(modalId) {
+        const modal = document.getElementById(modalId);
+        if (modal) {
+            modal.classList.add('active');
+            modal.style.display = 'flex';
+        }
+    }
+
+    closeModal(modalId) {
+        const modal = document.getElementById(modalId);
+        if (modal) {
+            modal.classList.remove('active');
+            modal.style.display = 'none';
+        }
+    }
+
+    showAlert(message, type = 'warning') {
+        this.showToast(message, type);
+        if (type === 'warning' || type === 'error') {
+            this.playAlertSound();
         }
     }
 }

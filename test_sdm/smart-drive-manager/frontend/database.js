@@ -23,12 +23,29 @@ class DatabaseAPI {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify(data)
+                body: JSON.stringify(data),
+                signal: AbortSignal.timeout(10000) // 10 second timeout
             });
 
             if (!response.ok) {
-                const errorText = await response.text();
+                let errorText = '';
+                try {
+                    errorText = await response.text();
+                } catch (e) {
+                    errorText = response.statusText;
+                }
                 console.error('HTTP Error Response:', response.status, errorText);
+                
+                // Try to parse as JSON for better error messages
+                try {
+                    const errorJson = JSON.parse(errorText);
+                    if (errorJson.message) {
+                        throw new Error(errorJson.message);
+                    }
+                } catch (e) {
+                    // Not JSON, use status text
+                }
+                
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
@@ -45,9 +62,14 @@ class DatabaseAPI {
             console.error('Data:', data);
 
             // Handle network errors
-            if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
+            if (error.message.includes('Failed to fetch') || error.name === 'TypeError' || error.name === 'AbortError') {
                 const networkError = new Error('Cannot connect to backend server. Make sure it is running on port 8080.');
                 networkError.name = 'NetworkError';
+                
+                if (this.app && this.app.showToast) {
+                    this.app.showToast('Backend server not available. Please check if the C++ server is running.', 'error');
+                }
+                
                 throw networkError;
             }
 
@@ -340,6 +362,24 @@ class DatabaseAPI {
         }
 
         return null;
+    }
+
+    async getExpenses(limit = 100) {
+        const response = await this.sendRequest('expense_get_list', {
+            limit: limit.toString()
+        });
+
+        if (response.status === 'success') {
+            if (response.data && response.data.expenses) {
+                return response.data.expenses;
+            }
+            if (response.data && Array.isArray(response.data)) {
+                return response.data;
+            }
+            return [];
+        }
+
+        return [];
     }
 
     async getExpenseSummary(startDate = null, endDate = null) {

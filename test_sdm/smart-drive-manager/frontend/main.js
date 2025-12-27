@@ -508,6 +508,23 @@ function setupGlobalFunctions() {
             if (window.app) window.app.showToast('Failed to start trip: ' + error.message, 'error');
         }
     };
+
+    // Vision processing functions
+    window.startVisionProcessing = () => {
+        if (window.cameraManager) {
+            window.cameraManager.startVisionProcessing();
+        } else if (window.app) {
+            window.app.showToast('Vision processing requires camera to be active', 'warning');
+        }
+    };
+
+    window.toggleNightVision = () => {
+        if (window.cameraManager) {
+            window.cameraManager.toggleNightVision();
+        } else if (window.app) {
+            window.app.showToast('Night vision requires camera to be active', 'warning');
+        }
+    };
     
     console.log('✅ Global functions set up');
 }

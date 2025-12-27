@@ -567,4 +567,73 @@ class AnalyticsManager {
             await this.updateMetrics();
         }
     }
+
+    async exportReport(name = 'Report') {
+        try {
+            if (this.app.showLoading) this.app.showLoading();
+            
+            // Gather all data
+            const stats = await window.db?.getTripStatistics() || {};
+            const trips = await window.db?.getTripHistory(100) || [];
+            const expenses = await window.db?.getExpenseSummary() || {};
+            
+            // Create CSV content
+            const csvContent = this.generateCSV(stats, trips, expenses);
+            
+            // Create download link
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `SmartDrive_${name}_${new Date().toISOString().split('T')[0]}.csv`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            
+            if (this.app.showToast) {
+                this.app.showToast('Report exported successfully!', 'success');
+            }
+        } catch (error) {
+            console.error('Export failed:', error);
+            if (this.app.showToast) {
+                this.app.showToast('Export failed: ' + error.message, 'error');
+            }
+        } finally {
+            if (this.app.hideLoading) this.app.hideLoading();
+        }
+    }
+
+    generateCSV(stats, trips, expenses) {
+        let csv = 'Smart Drive Manager - Data Export\n';
+        csv += `Generated: ${new Date().toLocaleString()}\n\n`;
+        
+        // Statistics section
+        csv += 'STATISTICS\n';
+        csv += 'Metric,Value\n';
+        csv += `Total Trips,${stats.total_trips || 0}\n`;
+        csv += `Total Distance,${(stats.total_distance || 0).toFixed(2)} km\n`;
+        csv += `Average Speed,${(stats.avg_speed || 0).toFixed(2)} km/h\n`;
+        csv += `Safety Score,${stats.safety_score || 1000}\n`;
+        csv += `Total Expenses,$${(expenses.total_expenses || 0).toFixed(2)}\n\n`;
+        
+        // Trips section
+        if (trips.length > 0) {
+            csv += 'TRIP HISTORY\n';
+            csv += 'Trip ID,Date,Distance (km),Duration,Avg Speed (km/h),Safety Score\n';
+            trips.forEach(trip => {
+                const date = trip.start_time 
+                    ? new Date(parseInt(trip.start_time) / 1000000).toLocaleDateString() 
+                    : 'N/A';
+                csv += `${trip.trip_id || 'N/A'},${date},${(parseFloat(trip.distance) || 0).toFixed(2)},`;
+                csv += `${this.formatDuration(trip.duration || 0)},${(parseFloat(trip.avg_speed) || 0).toFixed(1)},`;
+                csv += `${trip.safety_score || 'N/A'}\n`;
+            });
+        }
+        
+        return csv;
+    }
 }
+
+// Initialize when window.app is available
+window.analytics = null;
