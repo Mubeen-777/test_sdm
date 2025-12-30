@@ -485,18 +485,28 @@ function setupGlobalFunctions() {
 
         try {
             if (window.db) {
-                const tripId = await window.db.startTrip(
+                const tripResult = await window.db.startTrip(
                     parseInt(vehicleId),
                     parseFloat(startLat),
                     parseFloat(startLon),
                     startLocation
                 );
-                if (tripId) {
+                if (tripResult && tripResult.trip_id) {
                     if (window.app) {
                         window.app.showToast('Trip started successfully!', 'success');
                         window.closeModal('newTripModal');
                         window.app.isOnTrip = true;
-                        window.app.activeTripId = tripId;
+                        window.app.activeTripId = tripResult.trip_id;
+                        window.app.liveData.trip_id = tripResult.trip_id;
+                        window.app.liveData.trip_active = true;
+                        // Start trip tracker if available
+                        if (window.app.tripTracker) {
+                            window.app.tripTracker.startTrip(
+                                tripResult.trip_id,
+                                parseFloat(startLat),
+                                parseFloat(startLon)
+                            );
+                        }
                         window.app.updateTripControls();
                         if (window.app.currentPage === 'dashboard' || window.app.currentPage === 'trips') {
                             window.app.loadTrips && window.app.loadTrips();

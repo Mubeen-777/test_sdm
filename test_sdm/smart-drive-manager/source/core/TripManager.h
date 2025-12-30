@@ -165,7 +165,11 @@ public:
         active.record.duration = (active.record.end_time - active.record.start_time) / 1000000000;
         active.record.gps_data_count = active.waypoints.size();
 
-        db_.update_trip(active.record);
+        if (!db_.update_trip(active.record))
+        {
+            return false; // Database update failed
+        }
+        
         update_driver_stats(active.record);
 
         active_trips_.erase(it);

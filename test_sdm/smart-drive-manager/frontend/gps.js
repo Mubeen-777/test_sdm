@@ -1,362 +1,304 @@
-// gps.js - Advanced GPS Tracking & Safety System
+// gps_udp.js - GPS Manager using UDP data from device (NO browser GPS)
 class GPSManager {
     constructor(app) {
         this.app = app;
-        this.watchId = null;
         this.lastPosition = null;
         this.lastTime = null;
-        this.lastSpeed = 0; // m/s
+        this.lastSpeed = 0; // m/s from device
         
-        // Configuration Thresholds
-        this.THRESHOLDS = {
-            RAPID_ACCEL: 3.5, // m/s² (approx 0.35g)
-            HARD_BRAKE: -4.0, // m/s² (approx -0.4g)
-            CRASH_DECEL: -8.0, // m/s² (approx -0.8g) - sudden stop
-            MIN_SPEED_FOR_CRASH: 5.5, // m/s (approx 20 km/h) - must be moving to crash
-            GPS_TIMEOUT: 10000,
-            GPS_HIGH_ACCURACY: true
+        // Device data tracking
+        this.deviceConnected = false;
+        this.lastDataTime = null;
+        this.dataTimeout = 5000; // 5 seconds without data = disconnected
+        
+        // Safety event tracking (from device)
+        this.eventCounts = {
+            hardBrake: 0,
+            rapidAccel: 0,
+            crash: 0,
+            impact: 0
         };
-
-        this.sosTimer = null;
-        this.sosCountdown = 10;
-        this.pollInterval = null; // For fallback polling
+        
+        console.log('🚗 GPS Manager initialized (UDP mode - waiting for device data)');
     }
-
-    startTracking() {
-        if (!navigator.geolocation) {
-            console.error('❌ Geolocation is not supported by your browser');
-            if (this.app && this.app.showToast) {
-                this.app.showToast('Geolocation is not supported by your browser', 'error');
-            }
-            return false;
-        }
-
-        // Stop any existing tracking first
-        if (this.watchId !== null) {
-            this.stopTracking();
-        }
-
-        const options = {
-            enableHighAccuracy: true, // Use GPS hardware if available
-            timeout: 5000,            // Reduced timeout to 5 seconds for faster updates
-            maximumAge: 1000         // Allow 1 second old positions to ensure continuous updates
-        };
-
-        try {
-            // Use watchPosition for continuous updates
-            this.watchId = navigator.geolocation.watchPosition(
-                (pos) => {
-                    console.log('📍 GPS Position received:', pos.coords.latitude, pos.coords.longitude);
-                    this.processPosition(pos);
-                },
-                (err) => {
-                    console.error('❌ GPS Error:', err);
-                    this.handleError(err);
-                },
-                options
-            );
-
-            // Also set up a fallback polling mechanism to ensure updates happen
-            // This helps when watchPosition is slow or not updating frequently
-            if (this.pollInterval) {
-                clearInterval(this.pollInterval);
-            }
-            this.pollInterval = setInterval(() => {
-                navigator.geolocation.getCurrentPosition(
-                    (pos) => {
-                        // Only process if we haven't received an update recently
-                        const timeSinceLastUpdate = Date.now() - (this.lastTime || 0);
-                        if (timeSinceLastUpdate > 2000) { // If no update in 2 seconds, use this
-                            console.log('📍 GPS Poll update (fallback):', pos.coords.latitude, pos.coords.longitude);
-                            this.processPosition(pos);
-                        }
-                    },
-                    (err) => {
-                        // Silently fail for polling - watchPosition handles errors
-                        console.warn('GPS poll failed (non-critical):', err.code);
-                    },
-                    options
-                );
-            }, 1000); // Poll every second as fallback
-
-            console.log('✅ GPS Tracking Started (watchId:', this.watchId, ')');
-            if (this.app && this.app.showToast) {
-                this.app.showToast('GPS Tracking Active', 'success');
-            }
-            return true;
-        } catch (error) {
-            console.error('❌ Failed to start GPS tracking:', error);
-            if (this.app && this.app.showToast) {
-                this.app.showToast('Failed to start GPS: ' + error.message, 'error');
-            }
-            return false;
-        }
-    }
-
-    stopTracking() {
-        if (this.watchId !== null) {
-            navigator.geolocation.clearWatch(this.watchId);
-            this.watchId = null;
-        }
-        if (this.pollInterval) {
-            clearInterval(this.pollInterval);
-            this.pollInterval = null;
-        }
-        this.lastPosition = null;
-        this.lastTime = null;
-        this.lastSpeed = 0;
-        console.log('📍 GPS Tracking Stopped');
-    }
-
-    processPosition(position) {
-        if (!position || !position.coords) {
-            console.warn('⚠️ Invalid GPS position data');
+    
+    // Called when UDP data arrives via WebSocket
+    processUDPData(data) {
+        if (!data) {
+            console.warn('⚠️ Invalid UDP data received');
             return;
         }
-
-        const { latitude, longitude, accuracy, speed: gpsSpeed } = position.coords;
-        // Use current timestamp if GPS timestamp is not available or seems wrong
-        const currentTime = position.timestamp && position.timestamp > 0 
-            ? position.timestamp 
-            : Date.now();
-
-        console.log('📍 GPS Update:', {
-            lat: latitude.toFixed(6),
-            lon: longitude.toFixed(6),
-            accuracy: accuracy ? accuracy.toFixed(1) + 'm' : 'unknown',
-            speed: gpsSpeed !== null && gpsSpeed >= 0 ? (gpsSpeed * 3.6).toFixed(1) + ' km/h' : 'null',
-            timestamp: new Date(currentTime).toLocaleTimeString()
-        });
-
-        // Update basic location info on UI immediately
-        if (this.app && this.app.updateLocationUI) {
-            this.app.updateLocationUI(latitude, longitude, accuracy);
-        }
-
-        // If this is the first point, just store it and return
-        if (!this.lastPosition || !this.lastTime) {
-            this.lastPosition = { lat: latitude, lon: longitude };
-            this.lastTime = currentTime;
-            
-            // Still update UI with initial position
-            if (this.app && this.app.updateLiveData) {
-                this.app.updateLiveData({
-                    latitude: latitude,
-                    longitude: longitude,
-                    speed: gpsSpeed !== null && gpsSpeed >= 0 ? gpsSpeed * 3.6 : 0 // Use GPS speed if available
-                });
-            }
+        
+        this.deviceConnected = true;
+        this.lastDataTime = Date.now();
+        
+        const {
+            latitude,
+            longitude,
+            speed,           // km/h from device
+            gps_speed,       // km/h backup
+            acceleration,    // m/s² (accel_y from device)
+            accel_x,
+            accel_y,
+            accel_z,
+            gyro_x,
+            gyro_y,
+            gyro_z,
+            timestamp
+        } = data;
+        
+        // Validate data
+        if (!latitude || !longitude || isNaN(latitude) || isNaN(longitude)) {
+            console.warn('⚠️ Invalid GPS coordinates from device:', { latitude, longitude });
             return;
         }
-
-        // Calculate time delta (seconds)
-        const dt = (currentTime - this.lastTime) / 1000;
         
-        // More lenient time delta check - allow updates up to 10 seconds old
-        // This ensures we still process updates even if GPS is slow
-        if (dt <= 0) {
-            console.warn('⚠️ Invalid time delta:', dt);
-            return; // Prevent division by zero
-        }
-        if (dt > 10) {
-            console.warn('⚠️ GPS update too old:', dt, 'seconds. Resetting...');
-            // Reset and treat as new position
-            this.lastPosition = { lat: latitude, lon: longitude };
-            this.lastTime = currentTime;
-            if (this.app && this.app.updateLiveData) {
-                this.app.updateLiveData({
-                    latitude: latitude,
-                    longitude: longitude,
-                    speed: gpsSpeed !== null && gpsSpeed >= 0 ? gpsSpeed * 3.6 : 0
-                });
-            }
-            return;
-        }
-
-        // Calculate Distance (meters) using Haversine Formula
-        const distance = this.calculateDistance(
-            this.lastPosition.lat, this.lastPosition.lon,
-            latitude, longitude
-        );
-
-        // Calculate Calculated Speed (m/s)
-        // Note: gpsSpeed is provided by hardware, but sometimes null. 
-        // We use calculated speed as a fallback or verification.
-        const calculatedSpeed = distance / dt;
+        const currentTime = Date.now();
         
-        // Priority: Use GPS speed if available and reasonable, otherwise use calculated speed
-        // GPS speed is more accurate when available
-        let currentSpeed = 0;
-        if (gpsSpeed !== null && gpsSpeed >= 0 && !isNaN(gpsSpeed)) {
-            // GPS speed is available - use it with light smoothing
-            currentSpeed = 0.9 * gpsSpeed + 0.1 * this.lastSpeed;
-        } else if (calculatedSpeed >= 0 && !isNaN(calculatedSpeed)) {
-            // Use calculated speed with smoothing
-            currentSpeed = 0.8 * calculatedSpeed + 0.2 * this.lastSpeed;
-        } else {
-            // Fallback to last speed with decay
-            currentSpeed = this.lastSpeed * 0.95; // Decay slowly if no new data
-        }
+        // Use device-calculated speed (already in km/h)
+        const currentSpeed = speed || gps_speed || 0;
+        const speedMs = currentSpeed / 3.6; // Convert to m/s
         
-        // Ensure speed is non-negative and reasonable
-        currentSpeed = Math.max(0, Math.min(currentSpeed, 200)); // Cap at 200 m/s (720 km/h)
-        
-        // Calculate Acceleration (m/s²)
-        // a = (v_final - v_initial) / t
-        const acceleration = dt > 0 ? (currentSpeed - this.lastSpeed) / dt : 0;
-
-        // Logic Check: Ignore massive jumps (GPS glitches)
-        // If accel is > 20 m/s² (2g), it's likely a glitch unless crashing
-        if (Math.abs(acceleration) < 20) {
-            this.analyzeSafety(acceleration, currentSpeed);
-        }
-        
-        // Always update UI with speed and location (even if acceleration seems wrong)
-        // This ensures speedometer always shows current speed
-        if (this.app && this.app.updateLiveData) {
-            const speedKmh = currentSpeed * 3.6; // Convert m/s to km/h for display
-            console.log('📊 Updating live data - Speed:', speedKmh.toFixed(1), 'km/h, Distance:', distance.toFixed(1), 'm, dt:', dt.toFixed(2), 's');
-            this.app.updateLiveData({
-                speed: speedKmh,
-                acceleration: Math.abs(acceleration) < 20 ? acceleration : 0,
-                latitude: latitude,
-                longitude: longitude
+        // Log data every 2 seconds
+        if (!this.lastDataTime || currentTime - this.lastDataTime > 2000) {
+            console.log('📊 Device Data:', {
+                lat: latitude.toFixed(6),
+                lon: longitude.toFixed(6),
+                speed: currentSpeed.toFixed(1) + ' km/h',
+                accel: acceleration ? acceleration.toFixed(2) + ' m/s²' : 'N/A',
+                timestamp: new Date(timestamp || currentTime).toLocaleTimeString()
             });
-        } else {
-            console.warn('⚠️ App or updateLiveData not available');
         }
-
+        
+        // Update app's live data
+        if (this.app && this.app.updateLiveData) {
+            this.app.updateLiveData({
+                speed: currentSpeed,
+                acceleration: acceleration || 0,
+                latitude: latitude,
+                longitude: longitude,
+                gps_speed: gps_speed || currentSpeed,
+                accel_x: accel_x || 0,
+                accel_y: accel_y || 0,
+                accel_z: accel_z || 0,
+                gyro_x: gyro_x || 0,
+                gyro_y: gyro_y || 0,
+                gyro_z: gyro_z || 0
+            });
+        }
+        
+        // Update location UI immediately
+        if (this.app && this.app.updateLocationUI) {
+            this.app.updateLocationUI(latitude, longitude, 10); // Assume 10m accuracy from device
+        }
+        
+        // Record position in trip tracker if trip is active
+        if (this.app && this.app.tripTracker && this.app.tripTracker.isActive()) {
+            this.app.tripTracker.recordPosition(latitude, longitude, currentSpeed);
+        }
+        
         // Store for next iteration
         this.lastPosition = { lat: latitude, lon: longitude };
         this.lastTime = currentTime;
-        this.lastSpeed = currentSpeed;
+        this.lastSpeed = speedMs;
     }
-
-    calculateDistance(lat1, lon1, lat2, lon2) {
-        const R = 6371e3; // Earth radius in meters
-        const φ1 = lat1 * Math.PI / 180;
-        const φ2 = lat2 * Math.PI / 180;
-        const Δφ = (lat2 - lat1) * Math.PI / 180;
-        const Δλ = (lon2 - lon1) * Math.PI / 180;
-
-        const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-                  Math.cos(φ1) * Math.cos(φ2) *
-                  Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-        return R * c;
-    }
-
-    analyzeSafety(acceleration, currentSpeed) {
-        // 1. Crash Detection (Severe Deceleration)
-        if (acceleration < this.THRESHOLDS.CRASH_DECEL && this.lastSpeed > this.THRESHOLDS.MIN_SPEED_FOR_CRASH) {
-            console.warn('🚨 CRASH DETECTED');
-            this.triggerCrashSequence();
-            return; // Stop processing other alerts
+    
+    // Handle safety events from device
+    handleDeviceEvent(event) {
+        if (!event || !event.warning_type) {
+            console.warn('⚠️ Invalid event data:', event);
+            return;
         }
-
-        // 2. Hard Braking
-        if (acceleration < this.THRESHOLDS.HARD_BRAKE) {
-            this.app.showAlert('⚠️ Hard Braking Detected!', 'warning');
-            this.logSafetyEvent('Hard Braking', acceleration);
-        }
-
-        // 3. Rapid Acceleration
-        else if (acceleration > this.THRESHOLDS.RAPID_ACCEL) {
-            this.app.showAlert('⚠️ Rapid Acceleration!', 'warning');
-            this.logSafetyEvent('Rapid Acceleration', acceleration);
-        }
-    }
-
-    triggerCrashSequence() {
-        if (this.sosTimer) return; // Already running
-
-        const modal = document.getElementById('sosModal');
-        const countdownEl = document.getElementById('sosCountdown');
         
-        if (modal && countdownEl) {
-            this.app.showModal('sosModal');
-            this.sosCountdown = 10;
-            countdownEl.textContent = this.sosCountdown;
+        const { warning_type, value, latitude, longitude, timestamp } = event;
+        
+        console.log(`🚨 DEVICE EVENT: ${warning_type}`, {
+            value: value?.toFixed(2),
+            location: `${latitude?.toFixed(6)}, ${longitude?.toFixed(6)}`
+        });
+        
+        // Update event counters
+        switch(warning_type) {
+            case 'HARD_BRAKE':
+                this.eventCounts.hardBrake++;
+                if (this.app && this.app.liveData) {
+                    this.app.liveData.hard_brake_count = this.eventCounts.hardBrake;
+                }
+                this.showAlert('⚠️ Hard Braking Detected!', 'warning');
+                break;
+                
+            case 'RAPID_ACCEL':
+                this.eventCounts.rapidAccel++;
+                if (this.app && this.app.liveData) {
+                    this.app.liveData.rapid_accel_count = this.eventCounts.rapidAccel;
+                }
+                this.showAlert('⚠️ Rapid Acceleration!', 'warning');
+                break;
+                
+            case 'CRASH':
+            case 'IMPACT':
+                this.eventCounts.crash++;
+                this.showAlert('🚨 CRASH DETECTED!', 'error');
+                this.triggerCrashSequence(latitude, longitude, value);
+                break;
+        }
+        
+        // Update dashboard
+        if (this.app && this.app.updateDashboard) {
+            this.app.updateDashboard();
+        }
+        
+        // Play alert sound
+        if (this.app && this.app.playAlertSound) {
+            this.app.playAlertSound();
+        }
+    }
+    
+    showAlert(message, type) {
+        if (this.app && this.app.showToast) {
+            this.app.showToast(message, type);
+        }
+    }
+    
+    triggerCrashSequence(lat, lon, severity) {
+        console.log('🚨 Initiating crash response sequence');
+        
+        // Show SOS modal
+        const modal = document.getElementById('sosModal');
+        if (modal) {
+            modal.style.display = 'flex';
             
-            // Play alarm sound if available
-            if (this.app.playAlertSound) this.app.playAlertSound();
-
-            this.sosTimer = setInterval(() => {
-                this.sosCountdown--;
-                countdownEl.textContent = this.sosCountdown;
-
-                if (this.sosCountdown <= 0) {
-                    this.sendSOS();
-                    this.cancelCrashSequence(); // Stop timer/close modal
+            // Auto-send SOS after 10 seconds
+            let countdown = 10;
+            const countdownEl = document.getElementById('sosCountdown');
+            
+            const timer = setInterval(() => {
+                countdown--;
+                if (countdownEl) countdownEl.textContent = countdown;
+                
+                if (countdown <= 0) {
+                    clearInterval(timer);
+                    this.sendSOS(lat, lon, severity);
                 }
             }, 1000);
+            
+            // Store timer so it can be cancelled
+            modal.dataset.sosTimer = timer;
         }
     }
-
-    cancelCrashSequence() {
-        if (this.sosTimer) {
-            clearInterval(this.sosTimer);
-            this.sosTimer = null;
+    
+    async sendSOS(lat, lon, severity) {
+        console.log('📞 Sending SOS with location:', lat, lon);
+        
+        if (this.app && this.app.showToast) {
+            this.app.showToast('🚨 Sending Emergency SOS...', 'error');
         }
-        this.app.closeModal('sosModal');
-        this.app.showToast('SOS Cancelled', 'info');
-    }
-
-    async sendSOS() {
-        this.app.showToast('🚨 Sending Emergency SOS...', 'error');
         
         try {
-            // Call backend API to trigger SOS
+            // Report incident to database
             if (window.db) {
-                const { lat, lon } = this.lastPosition || { lat: 0, lon: 0 };
+                const vehicleId = this.app?.userData?.vehicle_id || 0;
                 await window.db.reportIncident(
-                    0, // Vehicle ID (unknown/current)
-                    0, // Type 0 = Accident
-                    lat, lon,
-                    "Automatic Crash Detection - G-Force Limit Exceeded"
+                    vehicleId,
+                    0, // Accident type
+                    lat,
+                    lon,
+                    `Automatic crash detection - Severity: ${severity?.toFixed(2) || 'Unknown'}`
                 );
             }
-            // In a real app, this would also SMS/Call contacts
-            alert('EMERGENCY SOS SENT TO CONTACTS AND AUTHORITIES!');
-        } catch (e) {
-            console.error('Failed to send SOS', e);
-        }
-    }
-
-    logSafetyEvent(type, value) {
-        console.log(`Safety Event: ${type} (${value.toFixed(2)} m/s²)`);
-        // Could be sent to backend here
-    }
-
-    handleError(error) {
-        let msg = 'GPS Error: ';
-        switch(error.code) {
-            case error.PERMISSION_DENIED: 
-                msg += 'User denied location permission. Please enable location access in browser settings.';
-                break;
-            case error.POSITION_UNAVAILABLE: 
-                msg += 'Location unavailable. Check GPS signal.';
-                break;
-            case error.TIMEOUT: 
-                msg += 'GPS request timed out. Retrying...';
-                break;
-            default: 
-                msg += 'Unknown error (code: ' + error.code + ')';
-                break;
-        }
-        console.error('❌', msg, error);
-        
-        // Show toast for important errors
-        if (this.app && this.app.showToast) {
-            if (error.code === error.PERMISSION_DENIED) {
-                this.app.showToast(msg, 'error');
-            } else if (error.code === error.POSITION_UNAVAILABLE) {
-                this.app.showToast(msg, 'warning');
+            
+            // Close modal
+            const modal = document.getElementById('sosModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+            
+            if (this.app && this.app.showToast) {
+                this.app.showToast('✅ Emergency services notified', 'success');
+            }
+            
+        } catch (error) {
+            console.error('❌ Failed to send SOS:', error);
+            if (this.app && this.app.showToast) {
+                this.app.showToast('❌ Failed to send SOS: ' + error.message, 'error');
             }
         }
+    }
+    
+    cancelCrashSequence() {
+        const modal = document.getElementById('sosModal');
+        if (modal) {
+            // Clear timer
+            if (modal.dataset.sosTimer) {
+                clearInterval(parseInt(modal.dataset.sosTimer));
+            }
+            modal.style.display = 'none';
+        }
+        
+        if (this.app && this.app.showToast) {
+            this.app.showToast('SOS Cancelled', 'info');
+        }
+    }
+    
+    // Check device connection status
+    checkConnectionStatus() {
+        if (!this.lastDataTime) {
+            this.deviceConnected = false;
+            return false;
+        }
+        
+        const timeSinceData = Date.now() - this.lastDataTime;
+        
+        if (timeSinceData > this.dataTimeout) {
+            if (this.deviceConnected) {
+                console.warn('⚠️ Device disconnected - no data for ' + (timeSinceData / 1000) + 's');
+                this.deviceConnected = false;
+                
+                if (this.app && this.app.showToast) {
+                    this.app.showToast('⚠️ Device disconnected. Check your device connection.', 'warning');
+                }
+            }
+            return false;
+        }
+        
+        return true;
+    }
+    
+    // Get connection status for UI
+    getStatus() {
+        return {
+            connected: this.deviceConnected,
+            lastUpdate: this.lastDataTime,
+            timeSinceUpdate: this.lastDataTime ? Date.now() - this.lastDataTime : null,
+            location: this.lastPosition,
+            speed: this.lastSpeed * 3.6, // Convert to km/h
+            eventCounts: this.eventCounts
+        };
+    }
+    
+    // No startTracking/stopTracking needed - device handles everything
+    startTracking() {
+        console.log('📱 Waiting for device data via UDP...');
+        
+        // Start connection check interval
+        this.connectionCheckInterval = setInterval(() => {
+            this.checkConnectionStatus();
+        }, 2000);
+        
+        return true;
+    }
+    
+    stopTracking() {
+        console.log('🛑 Stopping GPS tracking');
+        
+        if (this.connectionCheckInterval) {
+            clearInterval(this.connectionCheckInterval);
+            this.connectionCheckInterval = null;
+        }
+        
+        this.deviceConnected = false;
     }
 }
 
-// GPSManager will be initialized by app.js when window.app is ready
-// This ensures proper initialization order
+// Make globally accessible
+console.log('✅ GPS Manager (UDP Mode) loaded');

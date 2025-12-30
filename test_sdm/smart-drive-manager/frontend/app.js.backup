@@ -1,8 +1,7 @@
 // app.js - FIXED VERSION WITH WORKING BUTTONS AND REAL-TIME DATA
 class SmartDriveWebApp {
     constructor() {
-        // AGENT-2 FIX: WebSocket configuration with exponential backoff
-        this.WS_URL = window.__WS_BASE__ || 'ws://localhost:8081';
+        this.WS_URL = 'ws://localhost:8081';
         this.sessionId = localStorage.getItem('session_id');
         this.userData = JSON.parse(localStorage.getItem('user_data') || '{}');
         this.ws = null;
@@ -11,23 +10,9 @@ class SmartDriveWebApp {
         this.cameraWasStopped = false;
         this.isTripActive = false;
         this.currentPage = 'dashboard';
-
-        // AGENT-2: Exponential backoff configuration
-        this.maxReconnectAttempts = Infinity;  // Never give up!
         this.reconnectAttempts = 0;
-        this.reconnectDelay = 1000;  // Start at 1 second
-        this.maxReconnectDelay = 30000;  // Cap at 30 seconds
-        this.keepAliveInterval = null;
-        this.messageQueue = [];  // Queue messages while offline
-
+        this.maxReconnectAttempts = 5;
         this.dashboardRefreshInterval = null;
-
-        // AGENT-3: Trip Tracker initialization
-        this.tripTracker = null;
-        this.activeTripId = null;
-        this.lastTripData = null;
-        this.tripIdCounter = 0;  // Session-based counter for unique trip IDs
-        this.sessionStartTime = Date.now();  // Session start timestamp
 
         // Real-time data from WebSocket
         this.liveData = {
@@ -42,16 +27,6 @@ class SmartDriveWebApp {
             trip_id: 0,
             latitude: 31.5204,
             longitude: 74.3587
-        };
-
-        // GPS monitoring
-        this.gpsStatus = {
-            lastUpdate: null,
-            lastLat: null,
-            lastLon: null,
-            updateCount: 0,
-            stuckCount: 0,
-            isStuck: false
         };
 
         // FPS tracking
@@ -73,29 +48,26 @@ class SmartDriveWebApp {
 
         this.setupEventListeners();
         this.updateUserUI();
-
-        // AGENT-3: Initialize Trip Tracker
-        if (typeof TripTracker !== 'undefined') {
-            try {
-                this.tripTracker = new TripTracker(this);
-                window.tripTracker = this.tripTracker;  // Make globally accessible
-                console.log('✅ Trip Tracker initialized');
-            } catch (error) {
-                console.error('❌ Failed to initialize Trip Tracker:', error);
-                this.showToast('Failed to initialize Trip Tracker: ' + error.message, 'error');
-            }
-        } else {
-            console.warn('⚠️ TripTracker class not found.');
-        }
-
+        
+        // Initialize GPS Manager
         if (typeof GPSManager !== 'undefined') {
-            this.gpsManager = new GPSManager(this);
-            this.gpsManager.startTracking(); // Now waits for UDP data
-            console.log('✅ GPS Manager (UDP mode) initialized');
+            try {
+                this.gpsManager = new GPSManager(this);
+                window.gpsManager = this.gpsManager; // Make globally accessible
+                const gpsStarted = this.gpsManager.startTracking();
+                if (gpsStarted) {
+                    console.log('✅ GPS Manager initialized and started');
+                } else {
+                    console.warn('⚠️ GPS Manager initialized but failed to start tracking');
+                }
+            } catch (error) {
+                console.error('❌ Failed to initialize GPS Manager:', error);
+                this.showToast('Failed to initialize GPS: ' + error.message, 'error');
+            }
         } else {
             console.warn('⚠️ GPSManager class not found. GPS tracking will not work.');
         }
-
+        
         this.loadPage('dashboard');
         this.connectWebSocket();
 
@@ -116,14 +88,14 @@ class SmartDriveWebApp {
 
         // Check backend connection
         this.checkBackendConnection();
-
+        
         // Auto-start camera after login (camera runs permanently)
         this.autoStartCamera();
 
         console.log('✅ App initialized');
         console.log('✅ window.app set:', window.app === this);
     }
-
+    
     // Auto-start camera - runs permanently after login
     autoStartCamera() {
         // Wait for WebSocket to connect, then start camera
@@ -144,7 +116,7 @@ class SmartDriveWebApp {
                 setTimeout(startCameraWhenReady, 500);
             }
         };
-
+        
         // Start checking after a brief delay to allow WebSocket connection
         setTimeout(startCameraWhenReady, 1000);
     }
@@ -173,104 +145,7 @@ class SmartDriveWebApp {
         return this.sessionId && this.userData.driver_id;
     }
 
-    // ✅ NEW: Separate trip_started handler with validation
-    handleTripStarted(tripData) {
-        console.log('✅ Backend confirmed trip started:', tripData);
-
-        if (!tripData || typeof tripData !== 'object') {
-            console.error('❌ Invalid trip_started data:', tripData);
-            this.showToast('Warning: Invalid trip start response', 'warning');
-            return;
-        }
-
-        if (!tripData.trip_id) {
-            console.error('❌ trip_started received but no trip_id');
-            this.showToast('Warning: Trip started but no ID received', 'warning');
-            return;
-        }
-
-        const backendTripId = parseInt(tripData.trip_id);
-
-        if (!backendTripId || backendTripId === 0 || isNaN(backendTripId)) {
-            console.error('❌ Backend returned invalid trip_id:', backendTripId);
-            this.showToast('Warning: Invalid trip ID received', 'warning');
-            return;
-        }
-
-        // ✅ Use backend-assigned trip_id
-        this.isTripActive = true;
-        this.activeTripId = backendTripId;
-        this.liveData.trip_id = backendTripId;
-        this.liveData.trip_active = true;
-
-        console.log('✅ Using backend trip_id:', backendTripId);
-
-        // ✅ Update trip tracker with backend ID
-        if (this.tripTracker) {
-            if (this.tripTracker.isActive() && this.tripTracker.activeTrip) {
-                this.tripTracker.activeTrip.id = backendTripId;
-                console.log('✅ Updated trip tracker with backend ID:', backendTripId);
-            } else if (!this.tripTracker.isActive()) {
-                this.tripTracker.startTrip(
-                    backendTripId,
-                    this.liveData.latitude,
-                    this.liveData.longitude
-                );
-                console.log('✅ Started trip tracker with backend ID:', backendTripId);
-            }
-        }
-
-        this.updateTripControls();
-        this.showToast('✅ Trip started successfully!', 'success');
-    }
-
-    // ✅ NEW: Separate trip_stopped handler
-    handleTripStopped(tripData) {
-        console.log('✅ Backend confirmed trip stopped:', tripData);
-
-        this.isTripActive = false;
-        this.liveData.trip_active = false;
-        this.liveData.trip_id = 0;
-        this.activeTripId = null;
-
-        this.updateTripControls();
-
-        const distance = tripData?.distance || 'N/A';
-        this.showToast(`Trip ended. Distance: ${distance}`, 'success');
-
-        if (this.currentPage === 'trips') {
-            this.loadTrips();
-        }
-    }
-
-    // ✅ NEW: Separate error handler
-    handleWebSocketError(errorData) {
-        console.error('❌ WebSocket error received:', errorData);
-
-        const errorMessage = errorData.message || errorData.data?.message || 'Unknown error';
-        this.showToast('Error: ' + errorMessage, 'error');
-
-        // If trip-related error, clear trip state
-        if (errorMessage.toLowerCase().includes('trip')) {
-            console.warn('⚠️ Trip error detected, clearing trip state');
-            this.isTripActive = false;
-            this.activeTripId = null;
-            this.liveData.trip_active = false;
-            this.liveData.trip_id = 0;
-            if (this.tripTracker && this.tripTracker.isActive()) {
-                this.tripTracker.activeTrip = null;
-            }
-            this.updateTripControls();
-        }
-    }
-
-    // ✅ FIXED: Better WebSocket connection with error recovery
     connectWebSocket() {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            console.log('⚠️ WebSocket already connected');
-            return;
-        }
-
         console.log('🔌 Connecting to WebSocket:', this.WS_URL);
 
         try {
@@ -280,13 +155,10 @@ class SmartDriveWebApp {
                 console.log('✅ WebSocket Connected');
                 this.isConnected = true;
                 this.reconnectAttempts = 0;
-                this.reconnectDelay = 1000;
                 this.updateConnectionStatus(true);
-                this.showToast('✅ Connected to backend', 'success');
+                this.showToast('Connected to backend system', 'success');
 
-                this.setupHeartbeat();
-
-                // Restart camera on reconnection
+                // Always restart camera on reconnection (camera runs permanently)
                 setTimeout(() => {
                     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
                         this.ws.send(JSON.stringify({
@@ -296,357 +168,127 @@ class SmartDriveWebApp {
                         this.isCameraActive = true;
                         this.updateCameraStatus(true);
                         this.prepareVideoFeeds();
-                        console.log('🎥 Camera restarted after WebSocket connection');
+                        console.log('📹 Camera started/restarted after WebSocket connection');
                     }
                 }, 500);
 
-                this.flushMessageQueue();
+                // Keep-alive ping
+                if (this.keepAliveInterval) {
+                    clearInterval(this.keepAliveInterval);
+                }
+                this.keepAliveInterval = setInterval(() => {
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        this.ws.send(JSON.stringify({ command: 'ping' }));
+                    }
+                }, 30000);
             };
 
             this.ws.onmessage = (event) => {
                 try {
-                    // ✅ FIX: Better JSON parsing with validation
-                    const rawData = event.data;
-
-                    if (!rawData || typeof rawData !== 'string') {
-                        console.error('❌ Invalid WebSocket data type:', typeof rawData);
-                        return;
-                    }
-
-                    const data = JSON.parse(rawData);
+                    const data = JSON.parse(event.data);
                     this.handleWebSocketMessage(data);
-
                 } catch (error) {
-                    console.error('❌ Error parsing WebSocket message:', error);
-                    console.error('Raw data:', event.data);
+                    console.error('Error parsing message:', error);
                 }
             };
 
             this.ws.onerror = (error) => {
                 console.error('❌ WebSocket error:', error);
-                this.isConnected = false;
                 this.updateConnectionStatus(false);
             };
 
-            this.ws.onclose = (event) => {
-                console.log('🔌 WebSocket disconnected. Code:', event.code, 'Reason:', event.reason);
+            this.ws.onclose = () => {
+                console.log('🔌 WebSocket disconnected');
                 this.isConnected = false;
                 this.updateConnectionStatus(false);
 
-                if (this.keepAliveInterval) {
-                    clearInterval(this.keepAliveInterval);
+                if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                    this.reconnectAttempts++;
+                    console.log(`🔄 Reconnecting... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+                    setTimeout(() => this.connectWebSocket(), 3000);
                 }
-
-                // ✅ FIX: Don't reconnect if user logged out (code 1000)
-                if (event.code === 1000 && event.reason === 'User logout') {
-                    console.log('🚪 WebSocket closed due to logout, not reconnecting');
-                    return;
-                }
-
-                this.scheduleReconnect();
             };
 
         } catch (error) {
             console.error('❌ WebSocket creation failed:', error);
             this.showToast('Cannot connect to backend. Check if websocket_bridge is running.', 'error');
-            this.scheduleReconnect();
         }
     }
-
-    // AGENT-2: Exponential backoff reconnection
-    scheduleReconnect() {
-        this.reconnectAttempts++;
-
-        // Calculate exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s, 30s, ...
-        const baseDelay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-        const delay = Math.min(baseDelay, this.maxReconnectDelay);
-
-        console.log(`🔄 Reconnecting in ${Math.round(delay / 1000)}s... (Attempt ${this.reconnectAttempts})`);
-
-        setTimeout(() => {
-            console.log(`🔄 Attempting reconnection (Attempt ${this.reconnectAttempts})...`);
-            this.connectWebSocket();
-        }, delay);
-    }
-
-    // AGENT-2: Heartbeat to detect dead connections
-    setupHeartbeat() {
-        if (this.keepAliveInterval) {
-            clearInterval(this.keepAliveInterval);
-        }
-
-        this.keepAliveInterval = setInterval(() => {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                try {
-                    this.ws.send(JSON.stringify({
-                        type: 'ping',
-                        timestamp: Date.now()
-                    }));
-                } catch (error) {
-                    console.warn('Failed to send ping:', error);
-                }
-            }
-        }, 30000);  // Every 30 seconds
-    }
-
-    // AGENT-2: Queue messages while offline
-    queueMessage(message) {
-        if (this.messageQueue.length < 100) {  // Max 100 queued
-            this.messageQueue.push(message);
-            console.log(`📦 Queued message (${this.messageQueue.length} pending)`);
-        }
-    }
-
-    // AGENT-2: Flush queued messages when reconnected
-    flushMessageQueue() {
-        while (this.messageQueue.length > 0 && this.isConnected) {
-            const message = this.messageQueue.shift();
-            try {
-                this.ws.send(JSON.stringify(message));
-            } catch (error) {
-                console.error('Failed to send queued message:', error);
-                this.messageQueue.unshift(message);  // Put back if failed
-                break;
-            }
-        }
-        if (this.messageQueue.length === 0) {
-            console.log(`✅ All queued messages flushed`);
-        }
-    }
-    // app_websocket_udp.js - WebSocket message handler for UDP data
-    // Add this to app.js's handleWebSocketMessage function
 
     handleWebSocketMessage(data) {
-        // Validate message structure
-        if (!data || typeof data !== 'object') {
-            console.error('❌ Invalid WebSocket message:', data);
-            return;
-        }
-
-        if (!data.type) {
-            console.error('❌ WebSocket message missing type:', data);
-            return;
-        }
-
-        console.log('📨 WebSocket message:', data.type);
-
         switch (data.type) {
-            case 'live_data':
-                // ✅ NEW: Handle UDP data from device
-                if (data.data && typeof data.data === 'object') {
-                    this.handleUDPData(data.data);
-                } else {
-                    console.warn('⚠️ Invalid live_data format:', data);
-                }
-                break;
-
-            case 'warning':
-                // ✅ NEW: Handle safety events from device
-                if (data.data) {
-                    this.handleUDPEvent(data.data);
-                }
-                break;
-
-            case 'crash':
-                // ✅ NEW: Handle crash detection from device
-                if (data.data) {
-                    this.handleCrashEvent(data.data);
-                }
-                break;
-
             case 'video_frame':
-                if (data.data && data.timestamp) {
-                    this.displayVideoFrame(data.data, data.timestamp);
+                this.displayVideoFrame(data.data, data.timestamp);
+                break;
+
+            case 'live_data':
+                if (data.data) {
+                    this.updateLiveData(data.data);
                 }
                 break;
 
             case 'detection_data':
+                // Handle lane detection and vision data
                 if (window.cameraManager && data.data) {
                     window.cameraManager.updateFromWebSocket(data.data);
                 }
                 break;
 
             case 'lane_warning':
-                if (data.data && data.data.direction) {
-                    this.showToast(`⚠️ LANE DEPARTURE: ${data.data.direction}`, 'warning');
-                    this.playAlertSound();
-                    this.liveData.lane_departures++;
-                    this.updateDashboard();
-                }
+                this.showToast(`⚠️ LANE DEPARTURE: ${data.data.direction}`, 'warning');
+                this.playAlertSound();
+                this.liveData.lane_departures++;
+                this.updateDashboard();
+                break;
+
+            case 'warning':
+                this.showToast(`⚠️ ${data.data.warning_type}: ${data.data.value.toFixed(2)}`, 'warning');
+                this.playAlertSound();
                 break;
 
             case 'trip_started':
-                this.handleTripStarted(data.data);
+                this.isTripActive = true;
+                this.liveData.trip_active = true;
+                if (data.data && data.data.trip_id) {
+                    this.liveData.trip_id = parseInt(data.data.trip_id) || 0;
+                }
+                this.updateTripControls();
+                this.showToast('Trip started successfully!', 'success');
+                if (this.currentPage === 'trips') {
+                    this.loadTrips();
+                }
                 break;
 
             case 'trip_stopped':
-                this.handleTripStopped(data.data);
+                this.isTripActive = false;
+                this.liveData.trip_active = false;
+                this.liveData.trip_id = 0;
+                this.updateTripControls();
+                this.showToast(`Trip ended. Distance: ${data.data?.distance || 'N/A'}`, 'success');
+                if (this.currentPage === 'trips') {
+                    this.loadTrips();
+                }
                 break;
 
             case 'camera_status':
-                if (data.data && typeof data.data.enabled === 'boolean') {
-                    this.isCameraActive = data.data.enabled;
-                    this.updateCameraStatus(data.data.enabled);
+                const wasActive = this.isCameraActive;
+                this.isCameraActive = data.data.enabled;
+                this.updateCameraStatus(data.data.enabled);
+                
+                // If camera just became active, ensure video feeds are ready
+                if (!wasActive && data.data.enabled) {
+                    this.prepareVideoFeeds();
                 }
                 break;
-
-            case 'error':
-                this.handleWebSocketError(data);
+            
+            case 'camera_reset':
+                // Camera was reset, ready for new stream
+                console.log('Camera reset acknowledged');
+                this.cameraWasStopped = false;
                 break;
-
-            case 'pong':
-                console.log('💓 Heartbeat received');
-                break;
-
-            default:
-                console.warn('⚠️ Unknown message type:', data.type);
         }
     }
 
-    // ✅ NEW: Handle UDP GPS/ADAS data from device
-    handleUDPData(data) {
-        if (!data) {
-            console.warn('⚠️ handleUDPData called with null/undefined data');
-            return;
-        }
-
-        console.log('📊 Processing UDP data:', {
-            speed: data.speed ? data.speed.toFixed(1) + ' km/h' : 'N/A',
-            lat: data.latitude ? data.latitude.toFixed(6) : 'N/A',
-            lon: data.longitude ? data.longitude.toFixed(6) : 'N/A',
-            accel: data.acceleration ? data.acceleration.toFixed(2) + ' m/s²' : 'N/A'
-        });
-
-        // Update live data with device measurements
-        if (data.speed !== undefined && !isNaN(data.speed)) {
-            this.liveData.speed = Math.max(0, data.speed);
-        }
-        if (data.acceleration !== undefined && !isNaN(data.acceleration)) {
-            this.liveData.acceleration = data.acceleration;
-        }
-        if (data.latitude !== undefined && !isNaN(data.latitude)) {
-            this.liveData.latitude = data.latitude;
-        }
-        if (data.longitude !== undefined && !isNaN(data.longitude)) {
-            this.liveData.longitude = data.longitude;
-        }
-
-        // Pass to GPS manager for processing
-        if (this.gpsManager) {
-            this.gpsManager.processUDPData(data);
-        }
-
-        // Store to database if trip is active
-        if (this.isTripActive && this.activeTripId && window.db) {
-            this.storeGPSDataToDatabase(data);
-        }
-
-        // Update dashboard UI
-        this.updateDashboard();
-    }
-
-    // ✅ NEW: Handle safety events from device
-    handleUDPEvent(eventData) {
-        if (!eventData) return;
-
-        console.log('🚨 Safety event from device:', eventData.warning_type);
-
-        // Pass to GPS manager for event handling
-        if (this.gpsManager) {
-            this.gpsManager.handleDeviceEvent(eventData);
-        }
-
-        // Show alert
-        const message = `⚠️ ${eventData.warning_type}: ${eventData.value?.toFixed(2) || 'N/A'}`;
-        this.showToast(message, 'warning');
-        this.playAlertSound();
-
-        // Log event to database
-        if (window.db && this.activeTripId) {
-            this.logSafetyEventToDatabase(eventData);
-        }
-    }
-
-    // ✅ NEW: Handle crash detection
-    handleCrashEvent(eventData) {
-        if (!eventData) return;
-
-        console.log('🚨🚨🚨 CRASH DETECTED FROM DEVICE 🚨🚨🚨');
-
-        // Pass to GPS manager for crash sequence
-        if (this.gpsManager) {
-            this.gpsManager.triggerCrashSequence(
-                eventData.latitude,
-                eventData.longitude,
-                eventData.value
-            );
-        }
-
-        // Show critical alert
-        this.showToast('🚨 CRASH DETECTED! Emergency services will be notified.', 'error');
-        this.playAlertSound();
-    }
-
-    // ✅ NEW: Store GPS data to database periodically
-    async storeGPSDataToDatabase(data) {
-        // Rate limit: only store every 2 seconds
-        const now = Date.now();
-        if (!this.lastDBStoreTime) {
-            this.lastDBStoreTime = now;
-        }
-
-        if (now - this.lastDBStoreTime < 2000) {
-            return; // Too soon, skip
-        }
-
-        this.lastDBStoreTime = now;
-
-        try {
-            if (window.db && this.activeTripId) {
-                const result = await window.db.logGPSPoint(
-                    this.activeTripId,
-                    data.latitude,
-                    data.longitude,
-                    data.speed || 0
-                );
-
-                if (result) {
-                    console.log('✅ GPS data stored to database');
-                }
-            }
-        } catch (error) {
-            console.error('❌ Failed to store GPS data:', error);
-        }
-    }
-
-    // ✅ NEW: Log safety event to database
-    async logSafetyEventToDatabase(eventData) {
-        try {
-            if (!window.db || !this.activeTripId) return;
-
-            const vehicleId = this.userData?.vehicle_id || 0;
-
-            // Determine incident type
-            let incidentType = 4; // Default: Traffic Violation
-            if (eventData.warning_type === 'CRASH' || eventData.warning_type === 'IMPACT') {
-                incidentType = 0; // Accident
-            }
-
-            await window.db.reportIncident(
-                vehicleId,
-                incidentType,
-                eventData.latitude || this.liveData.latitude,
-                eventData.longitude || this.liveData.longitude,
-                `${eventData.warning_type}: ${eventData.value?.toFixed(2) || 'N/A'} (Trip ${this.activeTripId})`
-            );
-
-            console.log('✅ Safety event logged to database');
-        } catch (error) {
-            console.error('❌ Failed to log safety event:', error);
-        }
-    }
-
-    // Update existing updateLiveData to handle UDP data
     updateLiveData(data) {
         if (!data) {
             console.warn('⚠️ updateLiveData called with null/undefined data');
@@ -655,19 +297,21 @@ class SmartDriveWebApp {
 
         let dataChanged = false;
 
-        // Update speed
         if (data.speed !== undefined && !isNaN(data.speed)) {
             this.liveData.speed = Math.max(0, data.speed);
             dataChanged = true;
         }
-
-        // Update acceleration
         if (data.acceleration !== undefined && !isNaN(data.acceleration)) {
             this.liveData.acceleration = data.acceleration;
             dataChanged = true;
         }
-
-        // Update GPS coordinates
+        if (data.safety_score !== undefined) this.liveData.safety_score = data.safety_score;
+        if (data.lane_status !== undefined) this.liveData.lane_status = data.lane_status;
+        if (data.rapid_accel_count !== undefined) this.liveData.rapid_accel_count = data.rapid_accel_count;
+        if (data.hard_brake_count !== undefined) this.liveData.hard_brake_count = data.hard_brake_count;
+        if (data.lane_departures !== undefined) this.liveData.lane_departures = data.lane_departures;
+        if (data.trip_active !== undefined) this.liveData.trip_active = data.trip_active;
+        if (data.trip_id !== undefined) this.liveData.trip_id = data.trip_id;
         if (data.latitude !== undefined && !isNaN(data.latitude)) {
             this.liveData.latitude = data.latitude;
             dataChanged = true;
@@ -676,25 +320,13 @@ class SmartDriveWebApp {
             this.liveData.longitude = data.longitude;
             dataChanged = true;
         }
-
-        // Update other fields
-        if (data.safety_score !== undefined) this.liveData.safety_score = data.safety_score;
-        if (data.lane_status !== undefined) this.liveData.lane_status = data.lane_status;
-        if (data.rapid_accel_count !== undefined) this.liveData.rapid_accel_count = data.rapid_accel_count;
-        if (data.hard_brake_count !== undefined) this.liveData.hard_brake_count = data.hard_brake_count;
-        if (data.lane_departures !== undefined) this.liveData.lane_departures = data.lane_departures;
-        if (data.trip_active !== undefined) this.liveData.trip_active = data.trip_active;
-        if (data.trip_id !== undefined) this.liveData.trip_id = data.trip_id;
-
-        // Update GPS manager's position
+        
+        // Update GPS if available
         if (this.gpsManager && data.latitude && data.longitude) {
-            this.gpsManager.lastPosition = {
-                lat: data.latitude,
-                lon: data.longitude
-            };
+            this.gpsManager.lastPosition = { lat: data.latitude, lon: data.longitude };
         }
-
-        // Only update dashboard if data actually changed
+        
+        // Only update dashboard if data actually changed (to avoid unnecessary redraws)
         if (dataChanged) {
             this.updateDashboard();
         }
@@ -704,158 +336,14 @@ class SmartDriveWebApp {
         // Update location data immediately
         this.liveData.latitude = lat;
         this.liveData.longitude = lon;
-
+        
         // Update GPS display elements directly for immediate feedback
         const gpsLat = document.getElementById('gpsLat');
         const gpsLon = document.getElementById('gpsLon');
         if (gpsLat) gpsLat.textContent = lat.toFixed(6) + '°';
         if (gpsLon) gpsLon.textContent = lon.toFixed(6) + '°';
-
+        
         // Note: updateLiveData will also update these, but this ensures immediate UI feedback
-    }
-
-    // Monitor GPS status to detect if it's stuck
-    monitorGPS(data) {
-        if (!data.latitude || !data.longitude) {
-            return;
-        }
-
-        const now = Date.now();
-        const lat = parseFloat(data.latitude);
-        const lon = parseFloat(data.longitude);
-
-        // Check if GPS coordinates changed
-        if (this.gpsStatus.lastLat !== null && this.gpsStatus.lastLon !== null) {
-            const latDiff = Math.abs(lat - this.gpsStatus.lastLat);
-            const lonDiff = Math.abs(lon - this.gpsStatus.lastLon);
-
-            // If coordinates haven't changed significantly (less than 0.0001 degrees ≈ 11 meters)
-            if (latDiff < 0.0001 && lonDiff < 0.0001) {
-                this.gpsStatus.stuckCount++;
-
-                // Check if stuck for more than 30 seconds (30 updates at 1Hz)
-                if (this.gpsStatus.stuckCount > 30) {
-                    this.gpsStatus.isStuck = true;
-                    const stuckSeconds = this.gpsStatus.stuckCount;
-
-                    // Log warning every 10 seconds
-                    if (stuckSeconds % 10 === 0) {
-                        console.warn(`⚠️ GPS STUCK: Coordinates unchanged for ${stuckSeconds} seconds!`, {
-                            lat: lat.toFixed(6),
-                            lon: lon.toFixed(6),
-                            lastUpdate: this.gpsStatus.lastUpdate ? new Date(this.gpsStatus.lastUpdate).toLocaleTimeString() : 'never'
-                        });
-                    }
-                }
-            } else {
-                // Coordinates changed - reset stuck counter
-                if (this.gpsStatus.isStuck) {
-                    console.log('✅ GPS UNSTUCK: Coordinates are updating again');
-                }
-                this.gpsStatus.stuckCount = 0;
-                this.gpsStatus.isStuck = false;
-            }
-        }
-
-        // Update GPS status
-        this.gpsStatus.lastUpdate = now;
-        this.gpsStatus.lastLat = lat;
-        this.gpsStatus.lastLon = lon;
-        this.gpsStatus.updateCount++;
-
-        // Log GPS status every 10 seconds
-        if (this.gpsStatus.updateCount % 10 === 0) {
-            const timeSinceUpdate = this.gpsStatus.lastUpdate
-                ? Math.floor((now - this.gpsStatus.lastUpdate) / 1000)
-                : 0;
-
-            console.log(`📍 GPS Status:`, {
-                lat: lat.toFixed(6),
-                lon: lon.toFixed(6),
-                speed: data.speed || 0,
-                updates: this.gpsStatus.updateCount,
-                stuck: this.gpsStatus.isStuck ? `${this.gpsStatus.stuckCount}s` : 'no',
-                lastUpdate: timeSinceUpdate + 's ago'
-            });
-        }
-
-        // Update GPS status indicator in UI if element exists
-        this.updateGPSStatusIndicator();
-    }
-
-    updateGPSStatusIndicator() {
-        // Try to find or create GPS status indicator
-        let statusEl = document.getElementById('gpsStatusIndicator');
-        if (!statusEl) {
-            // Create status indicator if it doesn't exist
-            const dashboard = document.querySelector('.dashboard-stats, .stats-container, #dashboard');
-            if (dashboard) {
-                statusEl = document.createElement('div');
-                statusEl.id = 'gpsStatusIndicator';
-                statusEl.style.cssText = 'position: fixed; top: 10px; right: 10px; padding: 8px 12px; background: rgba(0,0,0,0.7); color: white; border-radius: 4px; font-size: 12px; z-index: 10000;';
-                document.body.appendChild(statusEl);
-            } else {
-                return; // Can't add indicator
-            }
-        }
-
-        const now = Date.now();
-        const timeSinceUpdate = this.gpsStatus.lastUpdate
-            ? Math.floor((now - this.gpsStatus.lastUpdate) / 1000)
-            : 999;
-
-        let statusText = '';
-        let statusColor = '#0f0';
-
-        if (this.gpsStatus.isStuck) {
-            statusText = `⚠️ GPS STUCK (${this.gpsStatus.stuckCount}s)`;
-            statusColor = '#f00';
-        } else if (timeSinceUpdate > 5) {
-            statusText = `⚠️ GPS Delay: ${timeSinceUpdate}s`;
-            statusColor = '#ff0';
-        } else {
-            statusText = `✅ GPS OK (${this.gpsStatus.updateCount} updates)`;
-            statusColor = '#0f0';
-        }
-
-        statusEl.textContent = statusText;
-        statusEl.style.borderLeft = `4px solid ${statusColor}`;
-    }
-
-    // GPS Status Checker - Call from browser console: window.app.checkGPSStatus()
-    checkGPSStatus() {
-        const now = Date.now();
-        const timeSinceUpdate = this.gpsStatus.lastUpdate
-            ? Math.floor((now - this.gpsStatus.lastUpdate) / 1000)
-            : null;
-
-        const status = {
-            isWorking: timeSinceUpdate !== null && timeSinceUpdate < 5,
-            isStuck: this.gpsStatus.isStuck,
-            stuckDuration: this.gpsStatus.isStuck ? `${this.gpsStatus.stuckCount}s` : '0s',
-            lastUpdate: this.gpsStatus.lastUpdate
-                ? new Date(this.gpsStatus.lastUpdate).toLocaleTimeString()
-                : 'never',
-            timeSinceUpdate: timeSinceUpdate !== null ? `${timeSinceUpdate}s ago` : 'unknown',
-            currentLocation: {
-                lat: this.liveData.latitude,
-                lon: this.liveData.longitude
-            },
-            totalUpdates: this.gpsStatus.updateCount,
-            speed: this.liveData.speed
-        };
-
-        console.log('📍 GPS Status Report:', status);
-
-        if (status.isStuck) {
-            console.warn('⚠️ GPS IS STUCK! Coordinates have not changed for', status.stuckDuration);
-        } else if (timeSinceUpdate === null || timeSinceUpdate > 5) {
-            console.warn('⚠️ GPS updates are delayed or not receiving data');
-        } else {
-            console.log('✅ GPS is working correctly');
-        }
-
-        return status;
     }
 
     // In app.js, replace the displayVideoFrame function:
@@ -915,135 +403,64 @@ class SmartDriveWebApp {
             this.lastFpsUpdate = now;
         }
     }
-    startTrip() {
-        console.log('🚗 Starting trip...');
 
+    // BUTTON HANDLERS - These are the real working functions
+    startTrip() {
+        console.log('Start trip clicked');
+        
         if (!this.isConnected && !this.ws) {
-            this.showToast('Not connected to WebSocket!', 'warning');
+            this.showToast('Not connected to WebSocket! Trying to connect...', 'warning');
             this.connectWebSocket();
             setTimeout(() => {
                 if (this.isConnected) {
                     this.startTrip();
+                } else {
+                    this.showToast('Failed to connect. Please check if websocket_bridge is running.', 'error');
                 }
             }, 2000);
             return;
         }
 
         const vehicleId = document.getElementById('vehicleSelect')?.value || 1;
-
+        
         if (!vehicleId || vehicleId === '') {
             this.showToast('Please select a vehicle first', 'error');
             return;
         }
 
-        // ✅ FIX: Let BACKEND generate the trip ID
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            // Send start_trip command WITHOUT local trip_id
             this.ws.send(JSON.stringify({
                 command: 'start_trip',
                 driver_id: this.userData.driver_id || 1,
                 vehicle_id: parseInt(vehicleId)
-                // ❌ REMOVED: trip_id generation - backend will assign it
             }));
-
-            console.log('📤 Sent start_trip request to backend (backend will assign ID)');
-
-            // Wait for backend to respond with trip_started message
-            this.showToast('⏳ Starting trip...', 'info');
-            this.updateTripControls();
+            this.showToast('Starting trip...', 'info');
         } else {
             this.showToast('WebSocket not connected. Please wait...', 'warning');
         }
     }
-    async stopTrip() {
-        console.log('🛑 Stopping trip...');
 
-        // ✅ Priority: Use backend-assigned trip_id
-        let tripIdToStop = this.liveData?.trip_id || this.activeTripId;
-
-        console.log('Trip state:', {
-            activeTripId: this.activeTripId,
-            liveData_trip_id: this.liveData?.trip_id,
-            isTripActive: this.isTripActive,
-            tripTrackerActive: this.tripTracker?.isActive()
-        });
-
-        // Validate we have an active trip
-        if (!tripIdToStop || tripIdToStop === 0) {
-            console.warn('⚠️ No valid trip ID to stop');
-            this.showToast('No active trip to stop', 'warning');
+    stopTrip() {
+        console.log('Stop trip clicked');
+        
+        if (!this.isConnected && !this.ws) {
+            this.showToast('Not connected to WebSocket!', 'error');
             return;
         }
 
-        console.log('🛑 Stopping trip with backend ID:', tripIdToStop);
-
-        // ✅ Stop trip tracker first (if active)
-        let tripTrackerStopped = false;
-        if (this.tripTracker && this.tripTracker.isActive()) {
-            try {
-                // Ensure trip tracker has correct backend ID
-                if (this.tripTracker.activeTrip) {
-                    this.tripTracker.activeTrip.id = tripIdToStop;
-                }
-
-                console.log('💾 Stopping trip tracker...');
-                tripTrackerStopped = await this.tripTracker.stopTrip();
-
-                if (!tripTrackerStopped) {
-                    console.error('❌ Trip tracker failed to save data');
-                    this.showToast('Warning: Trip data may not be saved', 'warning');
-                } else {
-                    console.log('✅ Trip tracker saved data successfully');
-                }
-            } catch (error) {
-                console.error('❌ Error stopping trip tracker:', error);
-                this.showToast('Error saving trip data: ' + error.message, 'error');
-            }
-        }
-
-        // ✅ Send stop command to backend
-        try {
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ws.send(JSON.stringify({
-                    command: 'stop_trip',
-                    trip_id: tripIdToStop
-                }));
-                console.log('📤 Sent stop_trip command via WebSocket');
-            } else if (window.db) {
-                // Fallback: Use DatabaseAPI
-                console.log('📤 Using DatabaseAPI to end trip (WebSocket unavailable)');
-
-                const endLat = this.liveData.latitude || 31.5204;
-                const endLon = this.liveData.longitude || 74.3587;
-
-                const result = await window.db.endTrip(tripIdToStop, endLat, endLon, '');
-
-                if (result) {
-                    console.log('✅ Trip ended via DatabaseAPI');
-                } else {
-                    throw new Error('DatabaseAPI returned false');
-                }
-            } else {
-                throw new Error('No connection method available');
-            }
-
-            // ✅ Clear trip state
-            this.isTripActive = false;
-            this.activeTripId = null;
-            this.liveData.trip_active = false;
-            this.liveData.trip_id = 0;
-
-            this.updateTripControls();
-            this.showToast('✅ Trip stopped successfully!', 'success');
-
-        } catch (error) {
-            console.error('❌ Failed to stop trip:', error);
-            this.showToast('Failed to stop trip: ' + error.message, 'error');
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+                command: 'stop_trip'
+            }));
+            this.showToast('Stopping trip...', 'info');
+        } else {
+            this.showToast('WebSocket not connected. Please wait...', 'warning');
         }
     }
+
     toggleCamera() {
         console.log('Toggle camera clicked, current state:', this.isCameraActive);
-
+        
         if (!this.isConnected && !this.ws) {
             this.showToast('Not connected to WebSocket! Trying to connect...', 'warning');
             this.connectWebSocket();
@@ -1059,7 +476,7 @@ class SmartDriveWebApp {
 
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             const newState = !this.isCameraActive;
-
+            
             // If starting camera after it was stopped, send a reset command first
             if (newState && this.cameraWasStopped) {
                 this.ws.send(JSON.stringify({
@@ -1078,23 +495,23 @@ class SmartDriveWebApp {
                     enable: newState
                 }));
             }
-
+            
             // Track if camera was stopped for restart handling
             if (!newState) {
                 this.cameraWasStopped = true;
             } else {
                 this.cameraWasStopped = false;
             }
-
+            
             // Reset video feed elements when stopping
             if (!newState) {
                 this.resetVideoFeeds();
             }
-
+            
             // Optimistically update UI immediately
             this.isCameraActive = newState;
             this.updateCameraStatus(newState);
-
+            
             this.showToast(newState ? 'Starting camera...' : 'Stopping camera...', 'info');
         } else {
             this.showToast('WebSocket not connected. Please wait...', 'warning');
@@ -1112,7 +529,7 @@ class SmartDriveWebApp {
         if (noVideo) {
             noVideo.style.display = 'flex';
         }
-
+        
         // Reset vision page feed
         const visionFeed = document.getElementById('visionFeed');
         const visionPlaceholder = document.getElementById('visionPlaceholder');
@@ -1123,7 +540,7 @@ class SmartDriveWebApp {
         if (visionPlaceholder) {
             visionPlaceholder.style.display = 'flex';
         }
-
+        
         // Reset FPS counters
         this.frameCount = 0;
         this.fpsCounter = 0;
@@ -1144,7 +561,7 @@ class SmartDriveWebApp {
         if (noVideo) {
             noVideo.style.display = 'none';
         }
-
+        
         // Prepare vision page feed
         const visionFeed = document.getElementById('visionFeed');
         const visionPlaceholder = document.getElementById('visionPlaceholder');
@@ -1155,7 +572,7 @@ class SmartDriveWebApp {
         if (visionPlaceholder) {
             visionPlaceholder.style.display = 'none';
         }
-
+        
         // Reset FPS counter for new stream
         this.frameCount = 0;
         this.fpsCounter = 0;
@@ -1311,7 +728,7 @@ class SmartDriveWebApp {
             if (enabled) {
                 cameraStatusBadge.innerHTML = '<i class="fas fa-circle" style="font-size: 8px; animation: pulse-dot 2s infinite;"></i> Active';
                 cameraStatusBadge.className = 'status-badge success';
-
+                
                 // Show video feed when camera is enabled
                 const videoFeed = document.getElementById('videoFeed');
                 const noVideo = document.getElementById('noVideo');
@@ -1343,7 +760,7 @@ class SmartDriveWebApp {
         const visionFeed = document.getElementById('visionFeed');
         const visionPlaceholder = document.getElementById('visionPlaceholder');
         const visionStatusBadge = document.getElementById('visionStatusBadge');
-
+        
         if (visionStatusBadge) {
             if (enabled) {
                 visionStatusBadge.innerHTML = '<i class="fas fa-circle" style="font-size: 8px; animation: pulse-dot 2s infinite;"></i> Active';
@@ -1353,7 +770,7 @@ class SmartDriveWebApp {
                 visionStatusBadge.className = 'status-badge warning';
             }
         }
-
+        
         if (visionFeed && visionPlaceholder) {
             if (enabled) {
                 visionFeed.src = '';
@@ -1484,7 +901,7 @@ class SmartDriveWebApp {
             window.cameraManager = new CameraManager(this);
             window.cameraManager.initVisionSystem();
         }
-
+        
         // Update camera status if already active
         if (this.isCameraActive) {
             const visionFeed = document.getElementById('visionFeed');
@@ -1542,7 +959,7 @@ class SmartDriveWebApp {
             const startTime = trip.start_time ? new Date(parseInt(trip.start_time) / 1000000).toLocaleString() : 'N/A';
             const endTime = trip.end_time ? new Date(parseInt(trip.end_time) / 1000000).toLocaleString() : 'N/A';
             const duration = trip.duration ? this.formatDuration(trip.duration) : 'N/A';
-
+            
             row.innerHTML = `
                 <td>${trip.trip_id || 'N/A'}</td>
                 <td>${startTime}</td>
@@ -1585,10 +1002,10 @@ class SmartDriveWebApp {
             const vehicles = await window.db.getVehicles();
             this.renderVehiclesGrid(vehicles);
             this.populateVehicleSelects(vehicles);
-
+            
             const alerts = await window.db.getMaintenanceAlerts();
             this.renderMaintenanceAlerts(alerts);
-
+            
             if (vehicles.length > 0) {
                 await this.loadMaintenanceHistory(vehicles[0].vehicle_id);
             }
@@ -1653,7 +1070,7 @@ class SmartDriveWebApp {
             const row = document.createElement('tr');
             const serviceDate = m.service_date ? new Date(parseInt(m.service_date) / 1000000).toLocaleDateString() : 'N/A';
             const type = typeNames[parseInt(m.type) || 0] || 'Unknown';
-
+            
             row.innerHTML = `
                 <td>${serviceDate}</td>
                 <td>${m.vehicle_id || 'N/A'}</td>
@@ -1709,7 +1126,7 @@ class SmartDriveWebApp {
 
             const currentValue = select.value;
             select.innerHTML = '<option value="">Select Vehicle</option>';
-
+            
             vehicles.forEach(vehicle => {
                 const option = document.createElement('option');
                 option.value = vehicle.vehicle_id;
@@ -1763,7 +1180,7 @@ class SmartDriveWebApp {
             const row = document.createElement('tr');
             const expenseDate = expense.expense_date ? new Date(parseInt(expense.expense_date) / 1000000).toLocaleDateString() : 'N/A';
             const category = categoryNames[parseInt(expense.category) || 0] || 'Unknown';
-
+            
             row.innerHTML = `
                 <td>${expenseDate}</td>
                 <td>${category}</td>
@@ -1813,7 +1230,7 @@ class SmartDriveWebApp {
             const categoryNames = ['Fuel', 'Maintenance', 'Insurance', 'Toll', 'Parking', 'Other'];
             const category = categoryNames[parseInt(alert.category) || 0] || 'Unknown';
             const isOver = alert.over_budget === '1' || alert.over_budget === true;
-
+            
             return `
                 <div class="budget-alert ${isOver ? 'over-budget' : 'warning'}">
                     <strong>${category}</strong>
@@ -1957,13 +1374,13 @@ class SmartDriveWebApp {
         }
 
         const typeNames = ['Accident', 'Breakdown', 'Theft', 'Vandalism', 'Traffic Violation'];
-
+        
         incidents.forEach(incident => {
             const row = document.createElement('tr');
             const incidentTime = incident.incident_time ? new Date(parseInt(incident.incident_time) / 1000000).toLocaleString() : 'N/A';
             const type = typeNames[parseInt(incident.type) || 0] || 'Unknown';
             const isResolved = incident.is_resolved === '1' || incident.is_resolved === true;
-
+            
             row.innerHTML = `
                 <td>${incidentTime}</td>
                 <td>${type}</td>
@@ -2049,7 +1466,7 @@ class SmartDriveWebApp {
                 this.gpsManager.startTracking();
             }
         }
-
+        
         // Set up periodic dashboard refresh to ensure UI stays updated
         // This helps when GPS updates are slow
         if (this.dashboardRefreshInterval) {
@@ -2228,46 +1645,9 @@ class SmartDriveWebApp {
     }
 
     logout() {
-        console.log('🚪 Logging out...');
-
-        // Stop all active processes
-        if (this.gpsManager) {
-            this.gpsManager.stopTracking();
-        }
-
-        if (this.tripTracker && this.tripTracker.isActive()) {
-            console.warn('⚠️ Stopping active trip before logout');
-            this.tripTracker.stopTrip().catch(err => {
-                console.error('Failed to stop trip on logout:', err);
-            });
-        }
-
-        // Close WebSocket
-        if (this.ws) {
-            this.ws.close(1000, 'User logout');
-            this.ws = null;
-        }
-
-        // Clear intervals
-        if (this.dashboardRefreshInterval) {
-            clearInterval(this.dashboardRefreshInterval);
-        }
-
-        // ✅ FIX: Clear ALL local storage
+        if (this.ws) this.ws.close();
         localStorage.clear();
-        sessionStorage.clear();
-
-        // ✅ FIX: Reset application state
-        this.sessionId = null;
-        this.userData = null;
-        this.isTripActive = false;
-        this.activeTripId = null;
-        this.isConnected = false;
-
-        console.log('✅ Logout complete, redirecting to login...');
-
-        // ✅ FIX: Use replace() to prevent back button issues
-        window.location.replace('/login.html');
+        window.location.href = 'login.html';
     }
 
     showLoading() {

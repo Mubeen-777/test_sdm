@@ -2,10 +2,8 @@
 class DatabaseAPI {
     constructor(app) {
         this.app = app;
-        // FIX (AGENT-1): Use environment variable or full URL
-        // Development: http://localhost:8080/api
-        // Production: https://api.yourdomain.com/api
-        this.API_BASE = window.__API_BASE__ || 'http://localhost:8080/api';
+        // Use proxy endpoint to avoid CORS issues
+        this.API_BASE = '/api';
     }
 
     async sendRequest(operation, data = {}) {
@@ -37,7 +35,7 @@ class DatabaseAPI {
                     errorText = response.statusText;
                 }
                 console.error('HTTP Error Response:', response.status, errorText);
-
+                
                 // Try to parse as JSON for better error messages
                 try {
                     const errorJson = JSON.parse(errorText);
@@ -47,7 +45,7 @@ class DatabaseAPI {
                 } catch (e) {
                     // Not JSON, use status text
                 }
-
+                
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
@@ -67,11 +65,11 @@ class DatabaseAPI {
             if (error.message.includes('Failed to fetch') || error.name === 'TypeError' || error.name === 'AbortError') {
                 const networkError = new Error('Cannot connect to backend server. Make sure it is running on port 8080.');
                 networkError.name = 'NetworkError';
-
+                
                 if (this.app && this.app.showToast) {
                     this.app.showToast('Backend server not available. Please check if the C++ server is running.', 'error');
                 }
-
+                
                 throw networkError;
             }
 
@@ -159,22 +157,9 @@ class DatabaseAPI {
             localStorage.removeItem('user_data');
         }
     }
+
+    // Trip Operations
     async startTrip(vehicleId, startLat, startLon, address = '') {
-        // Validate inputs first
-        if (!vehicleId || vehicleId === 0) {
-            throw new Error('Invalid vehicle_id');
-        }
-        if (isNaN(startLat) || isNaN(startLon)) {
-            throw new Error('Invalid starting coordinates');
-        }
-
-        console.log('📤 Starting trip:', {
-            vehicle_id: vehicleId,
-            latitude: startLat,
-            longitude: startLon,
-            address: address || '(empty)'
-        });
-
         const response = await this.sendRequest('trip_start', {
             vehicle_id: vehicleId.toString(),
             latitude: startLat.toString(),
@@ -183,107 +168,35 @@ class DatabaseAPI {
         });
 
         if (response.status === 'success' && response.data) {
-            const backendTripId = parseInt(response.data.trip_id);
-
-            if (!backendTripId || backendTripId === 0) {
-                throw new Error('Backend returned invalid trip_id');
-            }
-
-            console.log('✅ Trip started with backend ID:', backendTripId);
-
             return {
-                trip_id: backendTripId,  // ✅ Use backend-assigned ID
+                trip_id: parseInt(response.data.trip_id) || 0,
                 start_time: response.data.start_time || new Date().toISOString()
             };
         }
 
-        throw new Error('Failed to start trip: ' + (response.message || 'Unknown error'));
+        throw new Error('Failed to start trip');
     }
+
     async endTrip(tripId, endLat, endLon, address = '') {
-        try {
-            // ✅ FIX 1: Validate inputs BEFORE sending
-            if (!tripId || tripId === 0 || isNaN(tripId)) {
-                console.error('❌ Invalid trip_id:', tripId);
-                throw new Error('Invalid trip_id: trip ID must be a positive number');
-            }
+        const response = await this.sendRequest('trip_end', {
+            trip_id: tripId.toString(),
+            latitude: endLat.toString(),
+            longitude: endLon.toString(),
+            address: address
+        });
 
-            if (isNaN(endLat) || isNaN(endLon)) {
-                console.error('❌ Invalid coordinates:', { endLat, endLon });
-                throw new Error('Invalid coordinates: latitude and longitude must be valid numbers');
-            }
-
-            // ✅ FIX 2: Check if trip exists before trying to end it
-            console.log('🔍 Checking if trip exists:', tripId);
-            const tripExists = await this.checkTripExists(tripId);
-            if (!tripExists) {
-                console.error('❌ Trip does not exist in database:', tripId);
-                throw new Error(`Trip ${tripId} not found in database`);
-            }
-
-            console.log('📤 Sending trip_end request:', {
-                trip_id: tripId,
-                latitude: endLat,
-                longitude: endLon,
-                address: address || '(empty)'
-            });
-
-            const response = await this.sendRequest('trip_end', {
-                trip_id: tripId.toString(),
-                latitude: endLat.toString(),
-                longitude: endLon.toString(),
-                address: address || ''
-            });
-
-            if (response.status === 'success') {
-                console.log('✅ Trip ended successfully:', tripId);
-                return true;
-            } else {
-                console.error('❌ Trip end returned non-success:', response);
-                throw new Error(response.message || response.code || 'Trip end failed');
-            }
-        } catch (error) {
-            console.error('❌ endTrip error:', error);
-            console.error('Failed trip_id:', tripId);
-            console.error('Coordinates:', { endLat, endLon });
-
-            // ✅ FIX 3: Better error messages
-            if (error.message.includes('not found')) {
-                throw new Error(`Trip ${tripId} was not found. It may have already been stopped or never started.`);
-            } else if (error.message.includes('Invalid')) {
-                throw error; // Pass through validation errors
-            } else if (error.name === 'NetworkError') {
-                throw new Error('Cannot connect to backend. Ensure C++ server is running on port 8080.');
-            } else {
-                throw new Error(`Failed to end trip: ${error.message}`);
-            }
-        }
+        return response.status === 'success';
     }
+
     async logGPSPoint(tripId, latitude, longitude, speed) {
-        // Validate trip is active
-        if (!tripId || tripId === 0) {
-            console.warn('⚠️ Cannot log GPS: No active trip');
-            return false;
-        }
+        const response = await this.sendRequest('trip_log_gps', {
+            trip_id: tripId.toString(),
+            latitude: latitude.toString(),
+            longitude: longitude.toString(),
+            speed: speed.toString()
+        });
 
-        // Validate coordinates
-        if (isNaN(latitude) || isNaN(longitude) || isNaN(speed)) {
-            console.warn('⚠️ Invalid GPS data:', { latitude, longitude, speed });
-            return false;
-        }
-
-        try {
-            const response = await this.sendRequest('trip_log_gps', {
-                trip_id: tripId.toString(),
-                latitude: latitude.toString(),
-                longitude: longitude.toString(),
-                speed: speed.toString()
-            });
-
-            return response.status === 'success';
-        } catch (error) {
-            console.error('❌ Failed to log GPS point:', error);
-            return false;
-        }
+        return response.status === 'success';
     }
 
     async getTripHistory(limit = 20) {
@@ -513,16 +426,7 @@ class DatabaseAPI {
 
         return [];
     }
-    async checkTripExists(tripId) {
-        try {
-            const trips = await this.getTripHistory(100);
-            return trips.some(trip => parseInt(trip.trip_id) === parseInt(tripId));
-        } catch (error) {
-            console.warn('⚠️ Could not verify trip existence:', error);
-            // If we can't check, assume it exists (let backend handle validation)
-            return true;
-        }
-    }
+
     // Driver Operations
     async getDriverProfile() {
         const response = await this.sendRequest('driver_get_profile', {});

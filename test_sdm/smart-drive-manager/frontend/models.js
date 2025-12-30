@@ -214,9 +214,18 @@ class ModalManager {
             if (window.db) {
                 const result = await window.db.startTrip(vehicleId, parseFloat(startLat), parseFloat(startLon), startLocation);
                 
-                if (result) {
+                if (result && result.trip_id) {
                     this.app.liveData.trip_active = true;
                     this.app.liveData.trip_id = result.trip_id;
+                    this.app.activeTripId = result.trip_id;
+                    // Start trip tracker if available
+                    if (this.app.tripTracker) {
+                        this.app.tripTracker.startTrip(
+                            result.trip_id,
+                            parseFloat(startLat),
+                            parseFloat(startLon)
+                        );
+                    }
                     this.app.updateTripControls();
                     this.app.updateDashboard();
                     
